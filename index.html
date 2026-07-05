@@ -300,9 +300,15 @@ function findCreditLine(state, lineId) {
 function cardForLine(state, lineId) {
   return state.cards.find(c => c.creditLineId === lineId && c.status === 'active') || null;
 }
+// eCoins physically on the wallet: draws minus PAID spends (outlays).
 function ePurseBalance(agencyId, allTx) {
   return allTx.filter(t => t.agencyId === agencyId && t.status === 'approved')
-    .reduce((s, t) => s + (t.type === 'draw' ? t.amount : t.type === 'spend' ? -t.amount : 0), 0);
+    .reduce((s, t) => s + (t.type === 'draw' ? t.amount : (t.type === 'spend' && t.outlaid) ? -t.amount : 0), 0);
+}
+// Unpaid obligations: committed (contract awarded) but not yet outlaid.
+function unpaidObligations(agencyId, allTx) {
+  return allTx.filter(t => t.agencyId === agencyId && t.status === 'approved' && t.type === 'spend' && !t.outlaid)
+    .reduce((s, t) => s + t.amount, 0);
 }
 function drawnOnLine(lineId, allTx) {
   return allTx.filter(t => t.type === 'draw' && t.creditLineId === lineId && t.status === 'approved').reduce((s, t) => s + t.amount, 0);
@@ -316,23 +322,28 @@ function fiscAggregates(state) {
   const tx = state.transactions.filter(t => t.status === 'approved');
   const appropriated = enactedCreditLines(state).reduce((s, l) => s + (l.amountCap || 0), 0);
   const drawn = tx.filter(t => t.type === 'draw').reduce((s, t) => s + t.amount, 0);
-  const spent = tx.filter(t => t.type === 'spend').reduce((s, t) => s + t.amount, 0);
+  const obligated = tx.filter(t => t.type === 'spend').reduce((s, t) => s + t.amount, 0);
+  const outlaid = tx.filter(t => t.type === 'spend' && t.outlaid).reduce((s, t) => s + t.amount, 0);
   const collected = tx.filter(t => t.type === 'collect').reduce((s, t) => s + t.amount, 0);
-  return { appropriated, drawn, spent, collected, held: drawn - spent, outstanding: drawn - collected };
+  return { appropriated, drawn, obligated, outlaid, unpaidObligations: obligated - outlaid,
+    collected, held: drawn - outlaid, outstanding: drawn - collected };
 }
 
 /* ========== COMPLIANCE ENGINE ========== */
 // NDFR phase 3, "Coining": drawing newly created eCoins from Congress's
 // Treasury ATM against an enacted Public Credit line. Draws — not enactment —
 // are the moment digital dollars come into existence.
-function checkDrawCompliance(draw, line, card, allTx) {
+function checkDrawCompliance(draw, line, card, allTx, atmFrozen) {
   const violations = [];
   const checks = [];
   checks.push('Public Credit Card check');
   if (!card) {
-    violations.push('No Public Credit Card has been issued for this credit line. Congress must issue a Card (negotiated Terms & Conditions plus Budget Key signatures) before the agency can draw at the Treasury ATM.');
+    violations.push('No Public Credit Card has been issued for this credit line. Congress must issue a Card (negotiated Terms & Conditions, signed with legislative Budget Keys) before the agency can draw at the Treasury ATM. With a valid Card, draws are granted by default — the remaining checks are mechanical, not discretionary.');
   }
   checks.push('Financing handbrake check');
+  if (atmFrozen) {
+    violations.push('The Treasury ATM itself is FROZEN government-wide by Joint Resolution of Congress. All new eCoin draws are suspended until Congress lifts the freeze; eCoins already held on ePurses remain spendable.');
+  }
   if (line.frozen) {
     violations.push('This credit line is FROZEN by Joint Resolution of Congress (financing handbrake). New eCoin draws are suspended until Congress lifts the freeze; eCoins already held on the ePurse remain spendable.');
   }
@@ -352,22 +363,31 @@ function checkDrawCompliance(draw, line, card, allTx) {
   return { passed: violations.length === 0, violations, checkedAgainst: checks };
 }
 
-// NDFR phase 4, "Spending": eCoins leave the agency ePurse and enter public
-// circulation. An agency can never spend eCoins it has not drawn — the
-// Antideficiency Act analogue (31 U.S.C. 1341: no obligation or expenditure
-// in excess of available budget authority).
+// NDFR phase 4, "Spending": the agency OBLIGATES funds (contract award,
+// grant, hire), then pays. The Antideficiency Act analogue (31 U.S.C. 1341)
+// is enforced at obligation time: no commitment in excess of unobligated
+// balance, even before any eCoin leaves the ePurse.
 function checkSpendCompliance(spend, line, card, agencyId, allTx) {
   const violations = [];
   const checks = [];
-  checks.push('ePurse balance check (Antideficiency)');
-  const balance = ePurseBalance(agencyId, allTx);
-  if (spend.amount > balance) {
-    violations.push(`Insufficient ePurse balance: ${formatCurrency(spend.amount)} requested vs ${formatCurrency(balance)} held. Draw eCoins at the Treasury ATM first — an agency cannot spend in excess of funds held (cf. Antideficiency Act, 31 U.S.C. 1341).`);
+  // The Antideficiency analogue binds at OBLIGATION against budget authority
+  // (the credit line), not against cash on hand: 31 U.S.C. 1341 bars
+  // obligations exceeding the amount available in the appropriation.
+  // Liquidity (eCoins on the ePurse) is checked later, at payment.
+  checks.push('Budget authority check (Antideficiency, 31 U.S.C. 1341)');
+  if (line.amountCap !== null) {
+    const obligated = spentOnLine(line.id, allTx);
+    if (obligated + spend.amount > line.amountCap) {
+      violations.push(`Obligation exceeds available budget authority: ${formatCurrency(obligated + spend.amount)} cumulative obligations vs the ${formatCurrency(line.amountCap)} credit line (${formatCurrency(line.amountCap - obligated)} unobligated).`);
+    }
   }
   if (line.timeLimit) {
-    checks.push('Period of availability check');
+    // 31 U.S.C. 1502: the obligation must be incurred within the period of
+    // availability. Paying a validly incurred obligation later remains lawful
+    // (cf. 31 U.S.C. 1553), so this check does NOT apply at payment time.
+    checks.push('Period of availability check (31 U.S.C. 1502)');
     if (new Date(spend.timestamp) > new Date(line.timeLimit)) {
-      violations.push(`The credit line's period of availability ended ${formatDate(line.timeLimit)}.`);
+      violations.push(`The credit line's period of availability ended ${formatDate(line.timeLimit)}; new obligations may no longer be incurred against it (previously incurred obligations may still be paid).`);
     }
   }
   // Purpose control (31 U.S.C. 1301(a) analogue): spending must fit a
@@ -386,12 +406,6 @@ function checkSpendCompliance(spend, line, card, agencyId, allTx) {
         violations.push(`Exceeds the "${cat.label}" subcategory cap: ${formatCurrency(catSpent + spend.amount)} vs ${formatCurrency(cat.quantitativeCap)} permitted (${formatCurrency(cat.quantitativeCap - catSpent)} remaining).`);
       }
     }
-  }
-  checks.push('Line spend-vs-draw reconciliation');
-  const lineSpent = spentOnLine(line.id, allTx);
-  const lineDrawn = drawnOnLine(line.id, allTx);
-  if (lineSpent + spend.amount > lineDrawn) {
-    violations.push(`Spending against this credit line (${formatCurrency(lineSpent + spend.amount)}) would exceed the eCoins drawn on it (${formatCurrency(lineDrawn)}).`);
   }
   return { passed: violations.length === 0, violations, checkedAgainst: checks };
 }
@@ -455,8 +469,8 @@ function isPassed(votes) {
   if (!votes) return false;
   const houseOk = majorityPassed(votes.houseCount);
   const senateOk = majorityPassed(votes.senateCount);
-  const signed = votes.presidentialAction === 'signed';
-  return houseOk && senateOk && (signed || isVetoOverridden(votes));
+  const approved = votes.presidentialAction === 'signed' || votes.presidentialAction === 'no_action';
+  return houseOk && senateOk && (approved || isVetoOverridden(votes));
 }
 function isVetoOverridden(votes) {
   if (!votes || votes.presidentialAction !== 'vetoed') return false;
@@ -662,6 +676,7 @@ function getInitialState() {
     agencies: JSON.parse(JSON.stringify(AGENCIES)),
     cards: [],
     transactions: [],
+    atmFrozen: false,
     currentView: 'legislative',
     selectedBillId: null,
     selectedAgencyId: null,
@@ -754,6 +769,24 @@ function reducer(state, action) {
       for (const b of s.bills) {
         const l = b.creditLines.find(l => l.id === action.payload.lineId);
         if (l) l.frozen = action.payload.frozen;
+      }
+      return s;
+    }
+    case 'SET_ATM_FROZEN': s.atmFrozen = action.payload; return s;
+    case 'MARK_OUTLAID': {
+      // Payment of a previously incurred obligation. Liquidity binds HERE:
+      // the outlay needs eCoins on the ePurse, which may require another
+      // ATM draw first — budget authority and money are separate things.
+      const t = s.transactions.find(t => t.id === action.payload.txId);
+      if (t && t.type === 'spend' && t.status === 'approved' && !t.outlaid) {
+        const balance = ePurseBalance(t.agencyId, s.transactions);
+        if (t.amount <= balance) {
+          t.outlaid = true;
+          t.outlaidTimestamp = new Date().toISOString();
+          t.payError = null;
+        } else {
+          t.payError = `Payment blocked: ${formatCurrency(t.amount)} due but only ${formatCurrency(balance)} in eCoins held. Draw at the Treasury ATM, then pay.`;
+        }
       }
       return s;
     }
@@ -1066,7 +1099,7 @@ function renderVoteTab(bill) {
     ${renderVoteSection(bill, 'senate', v, s)}
     ${renderPresidentialSection(bill, v, s)}
     ${v.presidentialAction === 'vetoed' ? renderOverrideSection(bill, v, s) : ''}
-    ${s === 'signed' || (s === 'enacted' && v.presidentialAction === 'signed') ? '<div class="alert alert--success mt-4"><strong>Bill Enacted.</strong> Its Public Credit lines are now recorded on the Congressional Fiscal Record. Next step: Congress issues a Public Credit Card (Drawing phase) before the agency can withdraw eCoins.</div>' : ''}
+    ${s === 'signed' || (s === 'enacted' && (v.presidentialAction === 'signed' || v.presidentialAction === 'no_action')) ? '<div class="alert alert--success mt-4"><strong>Bill Enacted.</strong> Its Public Credit lines are now recorded on the Congressional Fiscal Record. Next step: Congress issues a Public Credit Card (Drawing phase) before the agency can withdraw eCoins.</div>' : ''}
     ${s === 'enacted' && isVetoOverridden(v) ? '<div class="alert alert--success mt-4"><strong>Veto Overridden — Bill Enacted.</strong> Both chambers reached two-thirds of Members present and voting. Public Credit lines are now live on the Fiscal Record.</div>' : ''}
   </div>`;
 }
@@ -1145,10 +1178,12 @@ function renderPresidentialSection(bill, votes, status) {
     <div class="card__header"><h3>Presidential Action</h3></div>
     <div class="card__body">
       ${votes.presidentialAction === 'signed' ? '<div class="alert alert--success"><strong>President Signed</strong> the bill into law.</div>' : ''}
+      ${votes.presidentialAction === 'no_action' ? '<div class="alert alert--success"><strong>Became Law Without Signature.</strong> The President neither signed nor returned the bill within ten days while Congress was in session (Art. I, &sect; 7) — the NDFR\'s "no alternative edit proposed in ten days" branch.</div>' : ''}
       ${votes.presidentialAction === 'vetoed' ? '<div class="alert alert--error"><strong>President Vetoed</strong> the bill.</div>' : ''}
-      ${!votes.presidentialAction || votes.presidentialAction === 'pending' ? `<p class="mb-4 text-sm">The bill has passed both chambers. The President must now sign or veto.</p>
+      ${!votes.presidentialAction || votes.presidentialAction === 'pending' ? `<p class="mb-4 text-sm">The bill has passed both chambers. The President may sign it, veto it, or let ten days pass — in which case it becomes law without his signature while Congress is in session (a pocket veto only if Congress has adjourned).</p>
         <div class="flex gap-2">
           <button class="btn btn--success" data-action="sign-bill" data-bill-id="${bill.id}">Sign into Law</button>
+          <button class="btn btn--outline" data-action="no-action-bill" data-bill-id="${bill.id}">Let 10 Days Pass</button>
           <button class="btn btn--danger" data-action="veto-bill" data-bill-id="${bill.id}">Veto</button>
         </div>` : ''}
     </div>
@@ -1261,8 +1296,8 @@ function renderCardPanel(line, agency, state) {
           </div>
           <div class="form-group"><label class="form-label">Qualitative Rules (one per line)</label><textarea class="form-textarea subcat-rules" data-idx="${i}" rows="2">${escHtml((sc.qualitativeRules || []).join('\n'))}</textarea></div>
         </div>`).join('')}
-        <div class="section-title mt-4">Budget Key Signatures</div>
-        <p class="text-xs text-muted mb-2">Card issuance is co-signed with secure digital "Budget Keys" — negotiated between the legislative issuer and the receiving executive agency.</p>
+        <div class="section-title mt-4">Issuance Signatures</div>
+        <p class="text-xs text-muted mb-2">The Card is issued and administered by Congress: legislative signatories sign with their <strong>Budget Keys</strong>. The receiving agency countersigns only to accept the negotiated Terms &amp; Conditions — it has no issuing authority.</p>
         <div class="form-group"><label class="form-label">Required Signatures</label><input class="form-input" id="card-req-sigs" type="number" min="1" value="${fs.requiredSigs}" style="width:80px;"></div>
         <div class="form-inline mb-2"><input class="form-input" id="card-new-sig" placeholder="Signatory name..."><button class="btn btn--outline btn--sm" data-action="add-signatory">Add</button></div>
         ${fs.signatories.map((sig, i) => `<div class="sig-check"><input type="checkbox" checked disabled> <span>${escHtml(sig)}</span> <button class="btn btn--danger btn--xs" data-action="remove-signatory" data-idx="${i}">&times;</button></div>`).join('')}
@@ -1313,7 +1348,8 @@ function renderAgencyDashboard(agency, state) {
   const lines = agencyCreditLines(state, agency.id);
   const totalCap = lines.reduce((s, l) => s + (l.amountCap || 0), 0);
   const totalDrawn = lines.reduce((s, l) => s + drawnOnLine(l.id, state.transactions), 0);
-  const totalSpent = txs.filter(t => t.type === 'spend' && t.status === 'approved').reduce((s, t) => s + t.amount, 0);
+  const totalOutlaid = txs.filter(t => t.type === 'spend' && t.status === 'approved' && t.outlaid).reduce((s, t) => s + t.amount, 0);
+  const unpaid = unpaidObligations(agency.id, state.transactions);
   const balance = ePurseBalance(agency.id, state.transactions);
   const fsD = formState.draw;
   const fsS = formState.spend;
@@ -1327,8 +1363,8 @@ function renderAgencyDashboard(agency, state) {
     <div class="card mb-4">
       <div class="card__header"><h3>ePurse (hardware wallet)</h3></div>
       <div class="card__body">
-        <div class="flex justify-between text-sm mb-2"><span>eCoins held: <strong style="font-size:16px;">${formatCurrency(balance)}</strong></span><span class="text-muted">drawn ${formatCurrency(totalDrawn)} &middot; spent ${formatCurrency(totalSpent)}</span></div>
-        <p class="text-xs text-muted">eCoins are created <em>de novo</em> at the ATM when drawn, and can only be spent from this balance — the agency can never spend money it has not drawn (Antideficiency analogue).</p>
+        <div class="flex justify-between text-sm mb-2"><span>eCoins held: <strong style="font-size:16px;">${formatCurrency(balance)}</strong></span><span class="text-muted">drawn ${formatCurrency(totalDrawn)} &middot; obligated (unpaid) ${formatCurrency(unpaid)} &middot; outlaid ${formatCurrency(totalOutlaid)}</span></div>
+        <p class="text-xs text-muted">Two separate controls: <strong>obligations</strong> are capped by the credit line — budget authority (31 U.S.C. 1341 analogue) — while <strong>payments</strong> require eCoins held here. eCoins are created <em>de novo</em> at the ATM when drawn.</p>
       </div>
     </div>
     ${lines.length > 0 ? `<div class="card mb-4"><div class="card__header"><h3>Public Credit Lines</h3><span class="text-sm text-muted">${formatCurrency(totalCap)} total credit</span></div><div class="card__body">
@@ -1363,8 +1399,9 @@ function renderAgencyDashboard(agency, state) {
       </div>
     </div>
     <div class="card mb-4">
-      <div class="card__header"><h3>Spend from ePurse (Spending)</h3></div>
+      <div class="card__header"><h3>Obligate Funds (Spending)</h3></div>
       <div class="card__body">
+        <p class="text-xs text-muted mb-2">Submitting creates an <strong>obligation</strong> (contract award, grant, hire) checked against budget authority, purpose, and subcategory caps. Pay it afterwards from the ledger below — payment needs eCoins on the ePurse.</p>
         <div class="form-row">
           <div class="form-group"><label class="form-label">Credit Line</label>
             <select class="form-select" id="spend-line">${lines.length === 0 ? '<option>No credit lines</option>' : `<option value="">Select...</option>${lines.map(a => `<option value="${a.id}" ${fsS.lineId === a.id ? 'selected' : ''}>${formatCurrency(a.amountCap)} — ${escHtml(a.billTitle || a.id)}</option>`).join('')}`}</select>
@@ -1377,16 +1414,20 @@ function renderAgencyDashboard(agency, state) {
           <div class="form-group"><label class="form-label">Amount ($)</label><input class="form-input" id="spend-amount" type="number" placeholder="e.g. 50000000" value="${fsS.amount}"></div>
           <div class="form-group"><label class="form-label">Description</label><input class="form-input" id="spend-desc" placeholder="What is this spending for?" value="${escHtml(fsS.description)}"></div>
         </div>
-        <button class="btn btn--primary" data-action="submit-spend" data-agency-id="${agency.id}">Submit Spending</button>
+        <button class="btn btn--primary" data-action="submit-spend" data-agency-id="${agency.id}">Submit Obligation</button>
       </div>
     </div>
     ${renderTransactionLog(txs)}
   </div>`;
 }
 
-function txTypeBadge(t) {
+function txTypeBadge(tx) {
+  const t = typeof tx === 'string' ? tx : tx.type;
   if (t === 'draw') return '<span class="badge badge--blue">ATM draw</span>';
-  if (t === 'spend') return '<span class="badge badge--purple">spend</span>';
+  if (t === 'spend') {
+    if (typeof tx === 'object' && tx.status === 'approved' && !tx.outlaid) return '<span class="badge badge--amber">obligation</span>';
+    return '<span class="badge badge--purple">outlay</span>';
+  }
   if (t === 'collect') return '<span class="badge badge--slate">collection</span>';
   return `<span class="badge badge--slate">${t}</span>`;
 }
@@ -1402,13 +1443,14 @@ function renderTransactionLog(txs) {
         ${sorted.map(tx => {
           const statusBadge = tx.status === 'approved' ? 'badge--green' : tx.status === 'rejected' ? 'badge--red' : tx.status === 'flagged' ? 'badge--orange' : 'badge--amber';
           const isExpanded = formState.expandedTxId === tx.id;
+          const payable = tx.type === 'spend' && tx.status === 'approved' && !tx.outlaid;
           return `<tr style="cursor:pointer;" data-action="toggle-tx" data-tx-id="${tx.id}">
             <td class="text-sm">${formatDate(tx.timestamp)}</td>
-            <td>${txTypeBadge(tx.type)}</td>
+            <td>${txTypeBadge(tx)}</td>
             <td>${tx.category ? `<span class="badge badge--slate">${escHtml(tx.category)}</span>` : '<span class="text-muted">—</span>'}</td>
             <td class="text-right"><strong>${formatCurrency(tx.amount)}</strong></td>
-            <td><span class="badge ${statusBadge}">${tx.status}</span></td>
-            <td class="text-sm">${escHtml(tx.description)}</td>
+            <td><span class="badge ${statusBadge}">${tx.status}</span>${payable ? ` <button class="btn btn--success btn--xs" data-action="pay-obligation" data-tx-id="${tx.id}">Pay</button>` : ''}</td>
+            <td class="text-sm">${escHtml(tx.description)}${tx.payError ? `<div class="text-xs" style="color:var(--red-600);margin-top:2px;">${escHtml(tx.payError)}</div>` : ''}</td>
           </tr>
           ${isExpanded && tx.complianceCheck ? `<tr class="expanded-row"><td colspan="6"><div class="compliance-detail">
             <strong>Compliance: ${tx.complianceCheck.passed ? 'PASSED' : 'FAILED'}</strong>
@@ -1435,8 +1477,9 @@ function renderRecord(state) {
   const stats = [
     { label: 'Appropriated (credit lines)', value: agg.appropriated, hint: 'spending power delegated on the Fiscal Record' },
     { label: 'Drawn (eCoins created)', value: agg.drawn, hint: 'new digital dollars issued at the Treasury ATM' },
-    { label: 'Held on ePurses', value: agg.held, hint: 'drawn but not yet spent' },
-    { label: 'Spent into circulation', value: agg.spent, hint: 'eCoins paid out by agencies' },
+    { label: 'Held on ePurses', value: agg.held, hint: 'drawn but not yet paid out' },
+    { label: 'Obligated (unpaid)', value: agg.unpaidObligations, hint: 'committed against budget authority, payment due' },
+    { label: 'Outlaid (paid into circulation)', value: agg.outlaid, hint: 'eCoins paid out by agencies' },
     { label: 'Collected (deleted)', value: agg.collected, hint: 'taxes & receipts redeem/delete eCoins' },
     { label: 'Outstanding eCoins', value: agg.outstanding, hint: 'drawn minus collected — no bond issuance required' }
   ];
@@ -1446,8 +1489,11 @@ function renderRecord(state) {
     <div class="stat-grid mb-4">
       ${stats.map(s => `<div class="card" style="margin-bottom:0;"><div class="text-xs text-muted">${s.label}</div><div style="font-size:20px;font-weight:700;margin:4px 0;">${formatCurrency(s.value)}</div><div class="text-xs text-muted">${s.hint}</div></div>`).join('')}
     </div>
+    ${state.atmFrozen ? '<div class="alert alert--error"><strong>ATM FROZEN GOVERNMENT-WIDE.</strong> A Joint Resolution has suspended all new eCoin draws at the Treasury ATM hardware layer. eCoins already on agency ePurses remain spendable.</div>' : ''}
     <div class="card card--flush mb-4">
-      <div class="card__header"><h3>Credit Lines &amp; Financing Handbrake</h3><span class="text-sm text-muted">freeze = Joint Resolution suspending new draws</span></div>
+      <div class="card__header"><h3>Credit Lines &amp; Financing Handbrake</h3>
+        <span class="flex items-center gap-2"><span class="text-sm text-muted">freeze = Joint Resolution suspending new draws</span>
+        ${state.atmFrozen ? '<button class="btn btn--outline btn--xs" data-action="unfreeze-atm">Lift ATM-wide freeze (JRes)</button>' : '<button class="btn btn--danger btn--xs" data-action="freeze-atm">Freeze ATM government-wide (JRes)</button>'}</span></div>
       <div class="table-wrap"><table>
         <thead><tr><th>Agency</th><th>Bill</th><th>Cap</th><th>Drawn</th><th>Card</th><th>Status</th><th></th></tr></thead>
         <tbody>
@@ -1490,7 +1536,7 @@ function renderRecord(state) {
           return `<tr>
             <td class="text-sm">${formatDate(tx.timestamp)}</td>
             <td class="text-sm">${ag ? ag.abbreviation : 'Fiscal Record'}</td>
-            <td>${txTypeBadge(tx.type)}</td>
+            <td>${txTypeBadge(tx)}</td>
             <td class="text-right"><strong>${formatCurrency(tx.amount)}</strong></td>
             <td><span class="badge ${statusBadge}">${tx.status}</span></td>
             <td class="text-sm">${escHtml(tx.description)}</td>
@@ -1696,7 +1742,7 @@ function handleAction(action, data, state) {
         status: 'pending', complianceCheck: { passed: true, violations: [], checkedAgainst: [] }
       };
       const card = cardForLine(st, lineId);
-      const compliance = checkDrawCompliance(tx, line, card, st.transactions);
+      const compliance = checkDrawCompliance(tx, line, card, st.transactions, st.atmFrozen);
       tx.complianceCheck = compliance;
       tx.status = compliance.passed ? 'approved' : 'rejected';
       formState.draw = { lineId: '', amount: '', description: '' };
@@ -1712,6 +1758,7 @@ function handleAction(action, data, state) {
         id: 'tx-' + uid(), type: 'spend', agencyId: data.agencyId, creditLineId: lineId,
         amount: parseFloat(formState.spend.amount), category: formState.spend.category,
         description: formState.spend.description || '', timestamp: new Date().toISOString(),
+        outlaid: false, payError: null,
         status: 'pending', complianceCheck: { passed: true, violations: [], checkedAgainst: [] }
       };
       const card = cardForLine(st, lineId);
@@ -1724,22 +1771,48 @@ function handleAction(action, data, state) {
     }
     case 'submit-collection': {
       if (!formState.collection.amount) return;
+      const st = Store.getState();
+      const agg = fiscAggregates(st);
+      const amount = parseFloat(formState.collection.amount);
+      // Collections redeem circulating eCoins; you cannot delete more than
+      // exist. (The Miscellaneous Receipts analogue: receipts flow to the
+      // Record, not into any agency's ePurse — cf. 31 U.S.C. 3302(b).)
+      const ok = amount <= agg.outstanding;
       const tx = {
         id: 'tx-' + uid(), type: 'collect', agencyId: null, creditLineId: null,
-        amount: parseFloat(formState.collection.amount), category: null,
+        amount, category: null,
         description: formState.collection.description || 'Tax & receipt collections (eCoins deleted)',
-        timestamp: new Date().toISOString(), status: 'approved',
-        complianceCheck: { passed: true, violations: [], checkedAgainst: ['Collections are recorded and deleted from outstanding eCoins'] }
+        timestamp: new Date().toISOString(), status: ok ? 'approved' : 'rejected',
+        complianceCheck: ok
+          ? { passed: true, violations: [], checkedAgainst: ['Receipts deposited to the Record, not to any ePurse (Miscellaneous Receipts analogue, 31 U.S.C. 3302(b))', 'Redeemed eCoins deleted from outstanding'] }
+          : { passed: false, violations: [`Cannot delete ${formatCurrency(amount)}: only ${formatCurrency(agg.outstanding)} in eCoins are outstanding.`], checkedAgainst: ['Outstanding eCoins check'] }
       };
       formState.collection = { amount: '', description: '' };
       Store.dispatch({ type: 'ADD_TRANSACTION', payload: tx });
       break;
     }
+    case 'pay-obligation':
+      Store.dispatch({ type: 'MARK_OUTLAID', payload: { txId: data.txId } });
+      break;
     case 'freeze-line':
       Store.dispatch({ type: 'SET_LINE_FROZEN', payload: { lineId: data.lineId, frozen: true } });
       break;
     case 'unfreeze-line':
       Store.dispatch({ type: 'SET_LINE_FROZEN', payload: { lineId: data.lineId, frozen: false } });
+      break;
+    case 'freeze-atm':
+      Store.dispatch({ type: 'SET_ATM_FROZEN', payload: true });
+      break;
+    case 'unfreeze-atm':
+      Store.dispatch({ type: 'SET_ATM_FROZEN', payload: false });
+      break;
+    case 'no-action-bill':
+      // Art. I, § 7: if the President neither signs nor returns the bill
+      // within ten days (Sundays excepted) while Congress is in session, it
+      // becomes law without his signature — the NDFR's 'failure to propose
+      // an alternative edit in ten days' branch.
+      Store.dispatch({ type: 'UPDATE_VOTES', payload: { billId: data.billId, votes: { presidentialAction: 'no_action' } } });
+      Store.dispatch({ type: 'ENACT_BILL', payload: { billId: data.billId } });
       break;
     case 'toggle-tx':
       formState.expandedTxId = formState.expandedTxId === data.txId ? null : data.txId;
@@ -1869,7 +1942,7 @@ async function startGuidedDemo() {
   Store._notify();
   document.body.classList.add('demo-active');
 
-  const T = 36; // total steps
+  const T = 38; // total steps
   const billId = 'bill-001';
 
   // Helper to bail early
@@ -2047,11 +2120,11 @@ async function startGuidedDemo() {
     'The Card\'s <strong>Terms &amp; Conditions</strong> define 5 executable subcategories totaling $5B: Interstate Bridge Repair ($1.5B), Urban Transit ($1.2B), High-Speed Rail ($1B), Rural Road &amp; Broadband ($800M), Ports ($500M). Unlike today\'s committee report language, these terms <strong>bind spending at the software layer</strong>.');
   if (ab()) return;
 
-  // Step 21: Budget Key signatures
-  formState.card.signatories = ['Sen. Patty Murray, Committee Chair (Budget Key)', 'Sec. Pete Buttigieg, DOT (Budget Key)'];
+  // Step 21: Issuance signatures
+  formState.card.signatories = ['Sen. Patty Murray, Chair, Joint Committee on the Fiscal Record (Budget Key)', 'Gene Dodaro, Comptroller General, GAO (issuance co-sign)'];
   render();
   await demoWaitForClick('Budget Keys', 21, T,
-    'Card issuance is co-signed with <strong>Budget Keys</strong> — secure digital signatures. Here the issuing committee chair and the receiving agency head both sign, formalizing the negotiated delegation between the branches.');
+    'Issuance is signed with legislative <strong>Budget Keys</strong>: the committee chair plus a supporting legislative-branch organ (GAO). The Card is <strong>issued and administered by Congress alone</strong> — DOT merely countersigns to accept the negotiated Terms &amp; Conditions, after the formalized inter-branch negotiation the paper describes.');
   if (ab()) return;
 
   // Step 22: Run a FAILING protocol check
@@ -2090,7 +2163,7 @@ async function startGuidedDemo() {
   Store.dispatch({ type: 'SELECT_AGENCY', payload: 'dot' });
   render();
   await demoWaitForClick('Coining', 24, T,
-    '<strong>Phase 3: Coining.</strong> This is DOT\'s dashboard: its <strong>ePurse</strong> (a locally hosted hardware wallet) holds <strong>$0</strong> — the $5B credit line is power, not money. Drawing at <strong>Congress\'s Treasury ATM</strong> creates brand-new eCoins <em>de novo</em>, loaded onto the ePurse, 24/7, with no Treasury or Federal Reserve intermediation and no bond issuance.');
+    '<strong>Phase 3: Coining.</strong> This is DOT\'s dashboard: its <strong>ePurse</strong> (a locally hosted hardware wallet) holds <strong>$0</strong> — the $5B credit line is power, not money. Drawing at <strong>Congress\'s Treasury ATM</strong> creates brand-new eCoins <em>de novo</em>, loaded onto the ePurse, 24/7, with no Treasury or Federal Reserve intermediation and no bond issuance. With a valid Card, draws are granted by default.');
   if (ab()) return;
 
   // Step 25: First draw — approved
@@ -2098,31 +2171,41 @@ async function startGuidedDemo() {
   function demoTx(fields) {
     return Object.assign({ id: 'tx-demo-' + uid(), agencyId: 'dot', creditLineId: dotLineId,
       category: null, description: '', timestamp: new Date().toISOString(), status: 'pending',
+      outlaid: false, payError: null,
       complianceCheck: { passed: true, violations: [], checkedAgainst: [] } }, fields);
   }
-  if (dotLineId) {
+  function runDemoDraw(amount, description) {
     const st = Store.getState();
     const line = findCreditLine(st, dotLineId);
     const card = cardForLine(st, dotLineId);
-    const d1 = demoTx({ type: 'draw', amount: 1.5e9, description: 'Initial eCoin draw for FY26 obligations' });
-    const c1 = checkDrawCompliance(d1, line, card, st.transactions);
-    d1.complianceCheck = c1; d1.status = c1.passed ? 'approved' : 'rejected';
-    Store.dispatch({ type: 'ADD_TRANSACTION', payload: d1 });
+    const d = demoTx({ type: 'draw', amount, description });
+    const c = checkDrawCompliance(d, line, card, st.transactions, st.atmFrozen);
+    d.complianceCheck = c; d.status = c.passed ? 'approved' : 'rejected';
+    Store.dispatch({ type: 'ADD_TRANSACTION', payload: d });
+    return d;
+  }
+  function runDemoObligation(amount, category, description) {
+    const st = Store.getState();
+    const line = findCreditLine(st, dotLineId);
+    const card = cardForLine(st, dotLineId);
+    const s = demoTx({ type: 'spend', amount, category, description });
+    const c = checkSpendCompliance(s, line, card, 'dot', st.transactions);
+    s.complianceCheck = c; s.status = c.passed ? 'approved' : 'rejected';
+    Store.dispatch({ type: 'ADD_TRANSACTION', payload: s });
+    return s;
+  }
+  if (dotLineId) {
+    runDemoDraw(1e9, 'Initial eCoin draw for FY26 obligations');
     render();
   }
   await demoWaitForClick('ATM Draw', 25, T,
-    '<strong>Draw approved: $1.5B in new eCoins</strong> now sit on DOT\'s ePurse. The ATM verified the Card, the handbrake status, the period of availability, and the cumulative cap. Government-wide <strong>outstanding eCoins just grew by $1.5B</strong> — deficits are money-financed by design under the NDFR.');
+    '<strong>Draw approved: $1B in new eCoins</strong> now sit on DOT\'s ePurse. The ATM verified the Card, the handbrake status, the period of availability, and the cumulative cap. Government-wide <strong>outstanding eCoins just grew by $1B</strong> — deficits are money-financed by design under the NDFR.');
   if (ab()) return;
 
   // Step 26: Excessive draw — rejected
+  let d2 = null;
   if (dotLineId) {
-    const st = Store.getState();
-    const line = findCreditLine(st, dotLineId);
-    const card = cardForLine(st, dotLineId);
-    const d2 = demoTx({ type: 'draw', amount: 6e9, description: 'Attempted draw beyond the credit line' });
-    const c2 = checkDrawCompliance(d2, line, card, st.transactions);
-    d2.complianceCheck = c2; d2.status = c2.passed ? 'approved' : 'rejected';
-    Store.dispatch({ type: 'ADD_TRANSACTION', payload: d2 });
+    d2 = runDemoDraw(6e9, 'Attempted draw beyond the credit line');
     formState.expandedTxId = d2.id;
     render();
   }
@@ -2130,115 +2213,117 @@ async function startGuidedDemo() {
     '<strong>Draw REJECTED: $6B</strong> — cumulative draws would exceed the $5B credit line. The quantitative cap is enforced in the ATM\'s software, not by an OMB apportionment memo or a Treasury official\'s discretion.');
   if (ab()) return;
 
-  // ===== PHASE 4: SPENDING =====
+  // ===== PHASE 4: SPENDING (obligation, then payment) =====
+  let ob1 = null;
   if (dotLineId) {
-    const st = Store.getState();
-    const line = findCreditLine(st, dotLineId);
-    const card = cardForLine(st, dotLineId);
-    const s1 = demoTx({ type: 'spend', amount: 250e6, category: 'Interstate Bridge Repair', description: 'I-95 Delaware River Bridge rehabilitation project' });
-    const cs1 = checkSpendCompliance(s1, line, card, 'dot', st.transactions);
-    s1.complianceCheck = cs1; s1.status = cs1.passed ? 'approved' : 'rejected';
-    Store.dispatch({ type: 'ADD_TRANSACTION', payload: s1 });
     formState.expandedTxId = null;
+    ob1 = runDemoObligation(250e6, 'Interstate Bridge Repair', 'I-95 Delaware River Bridge rehabilitation project');
+    Store.dispatch({ type: 'MARK_OUTLAID', payload: { txId: ob1.id } });
     render();
   }
   await demoWaitForClick('Spending', 27, T,
-    '<strong>Phase 4: Spending. $250M approved</strong> for I-95 bridge rehabilitation — the purpose matches the Card\'s "Interstate Bridge Repair" terms and the eCoins left DOT\'s ePurse for circulation. ePurse balance: <strong>$1.25B</strong>.');
+    '<strong>Phase 4: Spending — two distinct steps.</strong> DOT first <strong>obligated $250M</strong> (contract award, checked against budget authority and the Card\'s "Interstate Bridge Repair" terms), then <strong>paid</strong> it — an outlay of eCoins from the ePurse into circulation. Balance: <strong>$750M</strong>.');
   if (ab()) return;
 
-  // Step 28: Spend beyond the ePurse balance — rejected (Antideficiency)
+  // Step 28: Off-purpose obligation — rejected
+  let ob2 = null;
   if (dotLineId) {
-    const st = Store.getState();
-    const line = findCreditLine(st, dotLineId);
-    const card = cardForLine(st, dotLineId);
-    const s2 = demoTx({ type: 'spend', amount: 2e9, category: 'Urban Transit Modernization', description: 'Nationwide transit modernization mega-award' });
-    const cs2 = checkSpendCompliance(s2, line, card, 'dot', st.transactions);
-    s2.complianceCheck = cs2; s2.status = cs2.passed ? 'approved' : 'rejected';
-    Store.dispatch({ type: 'ADD_TRANSACTION', payload: s2 });
-    formState.expandedTxId = s2.id;
+    ob2 = runDemoObligation(50e6, 'Military Equipment', 'Armored vehicle procurement');
+    formState.expandedTxId = ob2.id;
     render();
   }
   await demoWaitForClick('Spending', 28, T,
-    '<strong>Spend REJECTED: $2B</strong> — DOT only holds $1.25B on its ePurse (and the transit subcategory is capped at $1.2B). You cannot spend eCoins you haven\'t drawn: the <strong>Antideficiency Act\'s</strong> no-spending-in-excess rule, enforced by the wallet itself.');
+    '<strong>Obligation REJECTED: $50M</strong> for "Military Equipment" — not a purpose on the Card\'s Terms &amp; Conditions. This is the <strong>purpose statute</strong> (31 U.S.C. 1301(a)) as executable code: appropriations may only be applied to their objects.');
   if (ab()) return;
 
-  // Step 29: Off-purpose spend — rejected
+  // Step 29: Over-cap obligation — rejected
+  let ob3 = null;
   if (dotLineId) {
-    const st = Store.getState();
-    const line = findCreditLine(st, dotLineId);
-    const card = cardForLine(st, dotLineId);
-    const s3 = demoTx({ type: 'spend', amount: 50e6, category: 'Military Equipment', description: 'Armored vehicle procurement' });
-    const cs3 = checkSpendCompliance(s3, line, card, 'dot', st.transactions);
-    s3.complianceCheck = cs3; s3.status = cs3.passed ? 'approved' : 'rejected';
-    Store.dispatch({ type: 'ADD_TRANSACTION', payload: s3 });
-    formState.expandedTxId = s3.id;
+    ob3 = runDemoObligation(2e9, 'Urban Transit Modernization', 'Nationwide transit modernization mega-award');
+    formState.expandedTxId = ob3.id;
     render();
   }
   await demoWaitForClick('Spending', 29, T,
-    '<strong>Spend REJECTED: $50M</strong> for "Military Equipment" — not a purpose on the Card\'s Terms &amp; Conditions. This is the <strong>purpose statute</strong> (31 U.S.C. 1301(a)) as executable code: appropriations may only be applied to their objects.');
+    '<strong>Obligation REJECTED: $2B</strong> against the $1.2B "Urban Transit Modernization" subcategory cap. Note what the engine checks: <strong>budget authority</strong>, not cash on hand — the Antideficiency Act (31 U.S.C. 1341) bars <em>obligations</em> in excess of the appropriation, before any payment happens.');
   if (ab()) return;
 
-  // Step 30: Ledger review
+  // Step 30: Valid obligation, payment blocked by liquidity
+  let ob4 = null;
+  if (dotLineId) {
+    ob4 = runDemoObligation(1e9, 'High-Speed Rail Corridors', 'NEC high-speed rail corridor grant');
+    Store.dispatch({ type: 'MARK_OUTLAID', payload: { txId: ob4.id } });
+    formState.expandedTxId = null;
+    render();
+  }
+  await demoWaitForClick('Spending', 30, T,
+    'Now the reverse case: a <strong>$1B rail obligation is APPROVED</strong> — well within budget authority — but the <strong>payment is BLOCKED</strong>: DOT holds only $750M in eCoins. Authority to spend and money to pay with are <strong>separate things</strong>: credit lines cap obligations; the ePurse funds outlays. (See the payment note on the ledger row.)');
+  if (ab()) return;
+
+  // Step 31: Draw more, then pay
+  if (dotLineId) {
+    runDemoDraw(5e8, 'Supplemental draw to fund rail outlay');
+    if (ob4) Store.dispatch({ type: 'MARK_OUTLAID', payload: { txId: ob4.id } });
+    render();
+  }
+  await demoWaitForClick('Spending', 31, T,
+    'DOT drew <strong>$500M more at the ATM</strong> (instant, 24/7 — no debt auction, no apportionment memo) and the <strong>$1B rail payment cleared</strong>. ePurse balance: $250M. Cumulative draws: $1.5B of the $5B line.');
+  if (ab()) return;
+
+  // Step 32: Ledger review
   formState.expandedTxId = null;
   render();
-  await demoWaitForClick('Ledger Node', 30, T,
-    'DOT\'s <strong>ledger node</strong> records every draw and spend — approved or rejected — with the compliance findings attached. Click any row for details. This local node is DOT\'s slice of the <strong>Federated Federal Ledger</strong>.');
+  await demoWaitForClick('Ledger Node', 32, T,
+    'DOT\'s <strong>ledger node</strong> records every draw, obligation, outlay — approved or rejected — with the compliance findings attached. Click any row for details. This local node is DOT\'s slice of the <strong>Federated Federal Ledger</strong>.');
   if (ab()) return;
 
   // ===== PHASE 5: PUBLISHING =====
   Store.dispatch({ type: 'SET_VIEW', payload: 'record' });
   render();
-  await demoWaitForClick('Publishing', 31, T,
-    '<strong>Phase 5: Publishing.</strong> Agency nodes sync automatically to Congress\'s super-node: the <strong>Public Statement and Account</strong> (Art. I, &sect; 9, cl. 7, as a live dashboard). Read the aggregates: appropriated, drawn, held, spent, collected, outstanding. Budgetary obfuscation gets structurally harder.');
+  await demoWaitForClick('Publishing', 33, T,
+    '<strong>Phase 5: Publishing.</strong> Agency nodes sync automatically to Congress\'s super-node: the <strong>Public Statement and Account</strong> (Art. I, &sect; 9, cl. 7, as a live dashboard). Read the aggregates: appropriated, drawn, held, obligated, outlaid, collected, outstanding. Budgetary obfuscation gets structurally harder.');
   if (ab()) return;
 
-  // Step 32: Financing handbrake — freeze
+  // Step 34: Financing handbrake — freeze
   if (dotLineId) Store.dispatch({ type: 'SET_LINE_FROZEN', payload: { lineId: dotLineId, frozen: true } });
   render();
-  await demoWaitForClick('Handbrake', 32, T,
-    'Congress just passed a Joint Resolution activating the <strong>financing handbrake</strong> on DOT\'s line — the NDFR\'s replacement for the debt ceiling. Instead of the Treasury Secretary running out of cash and dictating terms, <strong>only Congress</strong> can suspend new draws (subject to presidential veto and override). The parliamentary finger is on the button.');
+  await demoWaitForClick('Handbrake', 34, T,
+    'Congress just passed a Joint Resolution activating the <strong>financing handbrake</strong> on DOT\'s line — the NDFR\'s replacement for the debt ceiling. Instead of the Treasury Secretary running out of cash and dictating terms, <strong>only Congress</strong> can suspend new draws (subject to presidential veto and override) — per line, or government-wide at the ATM hardware layer. The parliamentary finger is on the button.');
   if (ab()) return;
 
-  // Step 33: Draw while frozen — rejected
+  // Step 35: Draw while frozen — rejected
   if (dotLineId) {
-    const st = Store.getState();
-    const line = findCreditLine(st, dotLineId);
-    const card = cardForLine(st, dotLineId);
-    const d3 = demoTx({ type: 'draw', amount: 5e8, description: 'Draw attempted during handbrake freeze' });
-    const c3 = checkDrawCompliance(d3, line, card, st.transactions);
-    d3.complianceCheck = c3; d3.status = c3.passed ? 'approved' : 'rejected';
-    Store.dispatch({ type: 'ADD_TRANSACTION', payload: d3 });
+    runDemoDraw(5e8, 'Draw attempted during handbrake freeze');
     render();
   }
-  await demoWaitForClick('Handbrake', 33, T,
+  await demoWaitForClick('Handbrake', 35, T,
     'DOT tried to draw <strong>$500M</strong> during the freeze — <strong>REJECTED at the ATM</strong>. Note what is <em>not</em> affected: eCoins already on the ePurse remain spendable, and the freeze is a deliberate, attributable act of Congress rather than an executive-branch improvisation.');
   if (ab()) return;
 
-  // Step 34: Lift the freeze, record collections
+  // Step 36: Lift the freeze, record collections
   if (dotLineId) Store.dispatch({ type: 'SET_LINE_FROZEN', payload: { lineId: dotLineId, frozen: false } });
   Store.dispatch({ type: 'ADD_TRANSACTION', payload: {
     id: 'tx-demo-collect', type: 'collect', agencyId: null, creditLineId: null,
     amount: 3e8, category: null, description: 'Q3 tax receipts redeemed (eCoins deleted)',
     timestamp: new Date().toISOString(), status: 'approved',
-    complianceCheck: { passed: true, violations: [], checkedAgainst: ['Collections are recorded and deleted from outstanding eCoins'] }
+    complianceCheck: { passed: true, violations: [], checkedAgainst: ['Receipts deposited to the Record, not to any ePurse (Miscellaneous Receipts analogue, 31 U.S.C. 3302(b))', 'Redeemed eCoins deleted from outstanding'] }
   }});
   render();
-  await demoWaitForClick('Collections', 34, T,
-    'Freeze lifted, and <strong>$300M in tax receipts</strong> just arrived. Under the NDFR taxes don\'t "fund" spending — collected eCoins are <strong>deleted</strong>, shrinking outstanding money. Watch the <strong>Collected</strong> and <strong>Outstanding</strong> figures move: spend creates, tax deletes.');
+  await demoWaitForClick('Collections', 36, T,
+    'Freeze lifted, and <strong>$300M in tax receipts</strong> just arrived. Under the NDFR taxes don\'t "fund" spending — collected eCoins are <strong>deleted</strong>, shrinking outstanding money (and receipts flow to the Record, never into an agency\'s ePurse — the Miscellaneous Receipts principle). Watch <strong>Collected</strong> and <strong>Outstanding</strong> move: draws create, taxes delete.');
   if (ab()) return;
 
-  // Step 35: Second bill
+  // Step 37: Second bill
   Store.dispatch({ type: 'SET_VIEW', payload: 'legislative' });
   Store.dispatch({ type: 'SELECT_BILL', payload: 'bill-002' });
   formState.activeTab = 'authorizations';
   render();
-  await demoWaitForClick('Second Bill', 35, T,
+  await demoWaitForClick('Second Bill', 37, T,
     'Back on the Record: the <strong>Public Health Emergency Preparedness Act</strong> appropriates credit lines for HHS ($5B) and EPA ($2.5B). Each line gets its own Card, draws, and ledger trail — agencies\' fiscal affairs stay decentralized while Congress keeps the consolidated books.');
   if (ab()) return;
 
-  // Step 36: Closing
-  await demoWaitForClick('Complete', 36, T,
-    '<strong>Demo complete!</strong> You walked the NDFR\'s five phases — <strong>Appropriating</strong> (credit lines on the Fiscal Record), <strong>Drawing</strong> (Public Credit Card issuance), <strong>Coining</strong> (eCoins created at Congress\'s Treasury ATM), <strong>Spending</strong> (ePurse-enforced purpose/amount/time limits), and <strong>Publishing</strong> (the live Public Statement and Account) — plus the financing handbrake and tax-deletion mechanics. Explore freely.');
+  // Step 38: Closing
+  await demoWaitForClick('Complete', 38, T,
+    '<strong>Demo complete!</strong> You walked the NDFR\'s five phases — <strong>Appropriating</strong> (credit lines on the Fiscal Record), <strong>Drawing</strong> (Public Credit Card issuance), <strong>Coining</strong> (eCoins created at Congress\'s Treasury ATM), <strong>Spending</strong> (obligation against budget authority, payment from the ePurse), and <strong>Publishing</strong> (the live Public Statement and Account) — plus the financing handbrake and tax-deletion mechanics. Explore freely.');
   if (ab()) return;
 
   // Clean up
