@@ -217,6 +217,11 @@ pre.bill-text { font-family: var(--font-mono); font-size: 12px; line-height: 1.6
 .refinement-tree-item--selected { background: var(--blue-50); font-weight: 600; }
 .refinement-tree-bill { padding: 10px 16px; font-weight: 700; font-size: 13px; background: var(--slate-50); border-bottom: 1px solid var(--slate-200); }
 
+/* ========== STAT GRID (Public Statement and Account) ========== */
+.stat-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; }
+.stat-grid .card { padding: 14px; }
+@media (max-width: 900px) { .stat-grid { grid-template-columns: repeat(2, 1fr); } }
+
 /* ========== DEMO MODE ========== */
 .demo-bar { position: fixed; bottom: 0; left: 0; right: 0; z-index: 200; background: var(--navy-900); color: white; box-shadow: 0 -4px 20px rgba(0,0,0,0.25); transition: transform 0.3s ease; }
 .demo-bar--hidden { transform: translateY(100%); }
@@ -274,58 +279,144 @@ function statusBadgeClass(s) {
 function uid() { return Date.now().toString(36) + Math.random().toString(36).substr(2, 6); }
 function escHtml(s) { const d = document.createElement('div'); d.textContent = s; return d.innerHTML; }
 
+/* ========== DERIVED STATE HELPERS ========== */
+// Under the NDFR, enactment does not move money to agencies. It records
+// Public Credit line entries on the Congressional Fiscal Record; everything
+// an agency "has" is derived from the Record plus the transaction ledger.
+function enactedCreditLines(state) {
+  return state.bills.filter(b => b.status === 'enacted')
+    .flatMap(b => b.creditLines.map(l => Object.assign({}, l, { billTitle: b.title })));
+}
+function agencyCreditLines(state, agencyId) {
+  return enactedCreditLines(state).filter(l => l.agencyId === agencyId);
+}
+function findCreditLine(state, lineId) {
+  for (const b of state.bills) {
+    const l = b.creditLines.find(l => l.id === lineId);
+    if (l) return Object.assign({}, l, { billTitle: b.title, billStatus: b.status });
+  }
+  return null;
+}
+function cardForLine(state, lineId) {
+  return state.cards.find(c => c.creditLineId === lineId && c.status === 'active') || null;
+}
+function ePurseBalance(agencyId, allTx) {
+  return allTx.filter(t => t.agencyId === agencyId && t.status === 'approved')
+    .reduce((s, t) => s + (t.type === 'draw' ? t.amount : t.type === 'spend' ? -t.amount : 0), 0);
+}
+function drawnOnLine(lineId, allTx) {
+  return allTx.filter(t => t.type === 'draw' && t.creditLineId === lineId && t.status === 'approved').reduce((s, t) => s + t.amount, 0);
+}
+function spentOnLine(lineId, allTx) {
+  return allTx.filter(t => t.type === 'spend' && t.creditLineId === lineId && t.status === 'approved').reduce((s, t) => s + t.amount, 0);
+}
+// The Public Statement and Account: government-wide aggregates tracked by
+// Congress's super-node on the Federated Federal Ledger.
+function fiscAggregates(state) {
+  const tx = state.transactions.filter(t => t.status === 'approved');
+  const appropriated = enactedCreditLines(state).reduce((s, l) => s + (l.amountCap || 0), 0);
+  const drawn = tx.filter(t => t.type === 'draw').reduce((s, t) => s + t.amount, 0);
+  const spent = tx.filter(t => t.type === 'spend').reduce((s, t) => s + t.amount, 0);
+  const collected = tx.filter(t => t.type === 'collect').reduce((s, t) => s + t.amount, 0);
+  return { appropriated, drawn, spent, collected, held: drawn - spent, outstanding: drawn - collected };
+}
+
 /* ========== COMPLIANCE ENGINE ========== */
-function checkTransactionCompliance(tx, auth, agency, allTx) {
+// NDFR phase 3, "Coining": drawing newly created eCoins from Congress's
+// Treasury ATM against an enacted Public Credit line. Draws — not enactment —
+// are the moment digital dollars come into existence.
+function checkDrawCompliance(draw, line, card, allTx) {
   const violations = [];
   const checks = [];
-  if (auth.type === 'quantitative' || auth.type === 'both') {
-    checks.push('Quantitative cap check');
-    if (auth.amountCap !== null) {
-      const spent = allTx.filter(t => t.authorizationId === auth.id && t.status === 'approved').reduce((s, t) => s + t.amount, 0);
-      if (spent + tx.amount > auth.amountCap) {
-        violations.push(`Exceeds authorization cap: ${formatCurrency(spent + tx.amount)} requested vs ${formatCurrency(auth.amountCap)} authorized (${formatCurrency(auth.amountCap - spent)} remaining)`);
-      }
+  checks.push('Public Credit Card check');
+  if (!card) {
+    violations.push('No Public Credit Card has been issued for this credit line. Congress must issue a Card (negotiated Terms & Conditions plus Budget Key signatures) before the agency can draw at the Treasury ATM.');
+  }
+  checks.push('Financing handbrake check');
+  if (line.frozen) {
+    violations.push('This credit line is FROZEN by Joint Resolution of Congress (financing handbrake). New eCoin draws are suspended until Congress lifts the freeze; eCoins already held on the ePurse remain spendable.');
+  }
+  if (line.timeLimit) {
+    checks.push('Period of availability check');
+    if (new Date(draw.timestamp) > new Date(line.timeLimit)) {
+      violations.push(`The credit line's period of availability ended ${formatDate(line.timeLimit)}. Expired budget authority cannot support new draws.`);
     }
   }
-  if (auth.timeLimit) {
-    checks.push('Time limit check');
-    if (new Date(tx.timestamp) > new Date(auth.timeLimit)) {
-      violations.push(`Authorization expired on ${formatDate(auth.timeLimit)}`);
+  checks.push('Quantitative cap check');
+  if (line.amountCap !== null) {
+    const drawn = drawnOnLine(line.id, allTx);
+    if (drawn + draw.amount > line.amountCap) {
+      violations.push(`Draw would exceed the credit line cap: ${formatCurrency(drawn + draw.amount)} cumulative draws vs ${formatCurrency(line.amountCap)} appropriated (${formatCurrency(line.amountCap - drawn)} undrawn).`);
     }
-  }
-  if (auth.categories && auth.categories.length > 0) {
-    checks.push('Category restriction check');
-    const validCats = auth.categories.map(c => c.label.toLowerCase());
-    if (!validCats.includes(tx.category.toLowerCase())) {
-      violations.push(`Category "${tx.category}" not authorized. Allowed: ${auth.categories.map(c => c.label).join(', ')}`);
-    }
-  }
-  checks.push('Agency credit limit check');
-  const agencySpent = allTx.filter(t => t.agencyId === agency.id && t.status === 'approved').reduce((s, t) => s + t.amount, 0);
-  if (agencySpent + tx.amount > agency.creditLimit) {
-    violations.push(`Exceeds agency credit limit: ${formatCurrency(agencySpent + tx.amount)} vs ${formatCurrency(agency.creditLimit)} limit`);
   }
   return { passed: violations.length === 0, violations, checkedAgainst: checks };
 }
 
-function checkRefinementCompliance(subcategories, auth) {
+// NDFR phase 4, "Spending": eCoins leave the agency ePurse and enter public
+// circulation. An agency can never spend eCoins it has not drawn — the
+// Antideficiency Act analogue (31 U.S.C. 1341: no obligation or expenditure
+// in excess of available budget authority).
+function checkSpendCompliance(spend, line, card, agencyId, allTx) {
   const violations = [];
   const checks = [];
-  if (auth.amountCap !== null) {
-    checks.push('Subcategory total vs authorization cap');
-    const total = subcategories.reduce((s, c) => s + (c.quantitativeCap || 0), 0);
-    if (total > auth.amountCap) {
-      violations.push(`Subcategories total ${formatCurrency(total)} exceeds authorization cap of ${formatCurrency(auth.amountCap)} by ${formatCurrency(total - auth.amountCap)}`);
+  checks.push('ePurse balance check (Antideficiency)');
+  const balance = ePurseBalance(agencyId, allTx);
+  if (spend.amount > balance) {
+    violations.push(`Insufficient ePurse balance: ${formatCurrency(spend.amount)} requested vs ${formatCurrency(balance)} held. Draw eCoins at the Treasury ATM first — an agency cannot spend in excess of funds held (cf. Antideficiency Act, 31 U.S.C. 1341).`);
+  }
+  if (line.timeLimit) {
+    checks.push('Period of availability check');
+    if (new Date(spend.timestamp) > new Date(line.timeLimit)) {
+      violations.push(`The credit line's period of availability ended ${formatDate(line.timeLimit)}.`);
     }
   }
-  if (auth.restrictions && auth.restrictions.length > 0) {
+  // Purpose control (31 U.S.C. 1301(a) analogue): spending must fit a
+  // category on the Card's Terms & Conditions (or the statutory categories
+  // if the Card did not refine them).
+  const cats = (card && card.termsAndConditions && card.termsAndConditions.length > 0) ? card.termsAndConditions : (line.categories || []);
+  if (cats.length > 0) {
+    checks.push('Purpose check (Card Terms & Conditions)');
+    const cat = cats.find(c => c.label.toLowerCase() === (spend.category || '').toLowerCase());
+    if (!cat) {
+      violations.push(`Purpose "${spend.category}" is not on the Card's Terms & Conditions. Permitted: ${cats.map(c => c.label).join(', ')}.`);
+    } else if (cat.quantitativeCap) {
+      checks.push('Subcategory cap check');
+      const catSpent = allTx.filter(t => t.type === 'spend' && t.creditLineId === line.id && t.category === cat.label && t.status === 'approved').reduce((s, t) => s + t.amount, 0);
+      if (catSpent + spend.amount > cat.quantitativeCap) {
+        violations.push(`Exceeds the "${cat.label}" subcategory cap: ${formatCurrency(catSpent + spend.amount)} vs ${formatCurrency(cat.quantitativeCap)} permitted (${formatCurrency(cat.quantitativeCap - catSpent)} remaining).`);
+      }
+    }
+  }
+  checks.push('Line spend-vs-draw reconciliation');
+  const lineSpent = spentOnLine(line.id, allTx);
+  const lineDrawn = drawnOnLine(line.id, allTx);
+  if (lineSpent + spend.amount > lineDrawn) {
+    violations.push(`Spending against this credit line (${formatCurrency(lineSpent + spend.amount)}) would exceed the eCoins drawn on it (${formatCurrency(lineDrawn)}).`);
+  }
+  return { passed: violations.length === 0, violations, checkedAgainst: checks };
+}
+
+// Card Terms & Conditions must fit inside the statutory credit line they
+// operationalize (Congress "compiling" qualitative authority into executable
+// quantitative form — the intra-legislative counterpart to OMB apportionment).
+function checkCardTermsCompliance(subcategories, line) {
+  const violations = [];
+  const checks = [];
+  if (line.amountCap !== null) {
+    checks.push('Terms & Conditions total vs credit line cap');
+    const total = subcategories.reduce((s, c) => s + (c.quantitativeCap || 0), 0);
+    if (total > line.amountCap) {
+      violations.push(`Terms & Conditions subcategories total ${formatCurrency(total)}, exceeding the ${formatCurrency(line.amountCap)} credit line by ${formatCurrency(total - line.amountCap)}`);
+    }
+  }
+  if (line.restrictions && line.restrictions.length > 0) {
     checks.push('Qualitative restriction consistency');
     for (const sub of subcategories) {
       for (const rule of (sub.qualitativeRules || [])) {
-        for (const restriction of auth.restrictions) {
+        for (const restriction of line.restrictions) {
           const rl = rule.toLowerCase(), resl = restriction.toLowerCase();
           if ((rl.includes('allow') && resl.includes('no ')) || (rl.includes('permit') && resl.includes('prohibit'))) {
-            violations.push(`Subcategory "${sub.label}" rule "${rule}" may contradict restriction "${restriction}"`);
+            violations.push(`Subcategory "${sub.label}" rule "${rule}" may contradict statutory restriction "${restriction}"`);
           }
         }
       }
@@ -334,22 +425,42 @@ function checkRefinementCompliance(subcategories, auth) {
   return { passed: violations.length === 0, violations, checkedAgainst: checks };
 }
 
+/* ========== VOTE MATH ========== */
+// Passage requires a majority of Members present and voting, a quorum being
+// present — not a fixed 218 or 51. (218/51 are the thresholds only when every
+// seat votes; "present" votes count toward the quorum but not the tally.)
+function majorityPassed(count) {
+  if (!count) return false;
+  const voting = count.yea + count.nay;
+  return voting > 0 && count.yea > count.nay;
+}
+function majorityNeeded(count) {
+  if (!count) return null;
+  const voting = count.yea + count.nay;
+  return voting > 0 ? Math.floor(voting / 2) + 1 : null;
+}
+// Veto override: two-thirds of Members present and voting in each chamber
+// (Art. I, § 7 as applied in congressional practice — abstentions and
+// "present" votes are excluded from the denominator).
+function overrideThreshold(count) {
+  if (!count) return null;
+  const voting = count.yea + count.nay;
+  return voting > 0 ? Math.ceil(voting * 2 / 3) : null;
+}
+function overridePassed(count) {
+  const t = overrideThreshold(count);
+  return t !== null && count.yea >= t;
+}
 function isPassed(votes) {
   if (!votes) return false;
-  const houseOk = votes.houseCount && votes.houseCount.yea >= 218;
-  const senateOk = votes.senateCount && votes.senateCount.yea >= 51;
+  const houseOk = majorityPassed(votes.houseCount);
+  const senateOk = majorityPassed(votes.senateCount);
   const signed = votes.presidentialAction === 'signed';
-  const overridden = isVetoOverridden(votes);
-  return houseOk && senateOk && (signed || overridden);
+  return houseOk && senateOk && (signed || isVetoOverridden(votes));
 }
 function isVetoOverridden(votes) {
   if (!votes || votes.presidentialAction !== 'vetoed') return false;
-  if (!votes.vetoOverrideHouse || !votes.vetoOverrideSenate) return false;
-  const hPresent = votes.vetoOverrideHouse.yea + votes.vetoOverrideHouse.nay + votes.vetoOverrideHouse.present;
-  const sPresent = votes.vetoOverrideSenate.yea + votes.vetoOverrideSenate.nay + votes.vetoOverrideSenate.present;
-  return hPresent > 0 && sPresent > 0 &&
-    votes.vetoOverrideHouse.yea >= Math.ceil(hPresent * 2 / 3) &&
-    votes.vetoOverrideSenate.yea >= Math.ceil(sPresent * 2 / 3);
+  return overridePassed(votes.vetoOverrideHouse) && overridePassed(votes.vetoOverrideSenate);
 }
 
 /* ========== MOCK DATA ========== */
@@ -398,15 +509,23 @@ const SENATE_MEMBERS = [
   {id:'s29',name:'Sen. Ben Ray Lujan [D-NM]',chamber:'senate'},{id:'s30',name:'Sen. Roger Marshall [R-KS]',chamber:'senate'}
 ];
 
+// Agencies hold no stored balances: everything is derived from the
+// Congressional Fiscal Record (enacted credit lines) and the transaction
+// ledger (draws, spends, collections). Their ePurse is a derived view.
 const AGENCIES = [
-  { id: 'epa', name: 'Environmental Protection Agency', abbreviation: 'EPA', creditLimit: 0, authorizations: [], transactions: [] },
-  { id: 'doe', name: 'Department of Energy', abbreviation: 'DOE', creditLimit: 0, authorizations: [], transactions: [] },
-  { id: 'hhs', name: 'Department of Health & Human Services', abbreviation: 'HHS', creditLimit: 0, authorizations: [], transactions: [] },
-  { id: 'dot', name: 'Department of Transportation', abbreviation: 'DOT', creditLimit: 0, authorizations: [], transactions: [] },
-  { id: 'nsf', name: 'National Science Foundation', abbreviation: 'NSF', creditLimit: 0, authorizations: [], transactions: [] },
-  { id: 'nasa', name: 'National Aeronautics & Space Administration', abbreviation: 'NASA', creditLimit: 0, authorizations: [], transactions: [] }
+  { id: 'epa', name: 'Environmental Protection Agency', abbreviation: 'EPA' },
+  { id: 'doe', name: 'Department of Energy', abbreviation: 'DOE' },
+  { id: 'hhs', name: 'Department of Health & Human Services', abbreviation: 'HHS' },
+  { id: 'dot', name: 'Department of Transportation', abbreviation: 'DOT' },
+  { id: 'nsf', name: 'National Science Foundation', abbreviation: 'NSF' },
+  { id: 'nasa', name: 'National Aeronautics & Space Administration', abbreviation: 'NASA' }
 ];
 
+// NOTE: The sample bills make APPROPRIATIONS — they establish Public Credit
+// lines on the Congressional Fiscal Record. A bill that merely says "there is
+// authorized to be appropriated..." confers no budget authority at all (see
+// GAO, Principles of Federal Appropriations Law): an authorization is a
+// hunting license for a later appropriation, not spendable power.
 const BILL_1_TEXT = `CONGRESSIONAL INFRASTRUCTURE & INNOVATION ACT
 
 Be it enacted by the Senate and House of Representatives of the United States of America in Congress assembled,
@@ -419,30 +538,36 @@ Congress finds the following:
 (1) The nation's infrastructure requires significant modernization investment.
 (2) Clean energy transition requires dedicated federal funding channels.
 (3) Scientific research and STEM workforce development are critical to national competitiveness.
+(4) Under the New Digital Fiscal Regime, appropriations take the form of Public Credit lines recorded on the Congressional Fiscal Record.
 
-SECTION 3. TRANSPORTATION INFRASTRUCTURE AUTHORIZATION.
-(a) IN GENERAL.—There is authorized to be appropriated to the Department of Transportation $5,000,000,000 over 5 fiscal years.
-(b) ALLOCATION.—Funds shall be allocated as follows:
+SECTION 3. TRANSPORTATION PUBLIC CREDIT LINE.
+(a) IN GENERAL.—There is hereby appropriated, in the form of a Public Credit line recorded on the Congressional Fiscal Record, $5,000,000,000 for the Department of Transportation, to remain available through September 30, 2031.
+(b) ALLOCATION.—Amounts drawn against the line shall be allocated as follows:
   (1) Bridge and highway repair: up to $2,000,000,000
   (2) Public transit expansion: up to $1,500,000,000
   (3) Rail infrastructure: up to $1,000,000,000
   (4) Rural connectivity: up to $500,000,000
 
-SECTION 4. CLEAN ENERGY AUTHORIZATION.
-(a) IN GENERAL.—There is authorized $3,000,000,000 to the Department of Energy over 5 fiscal years.
-(b) ALLOCATION.—Funds shall support:
+SECTION 4. CLEAN ENERGY PUBLIC CREDIT LINE.
+(a) IN GENERAL.—There is hereby appropriated, as a Public Credit line, $3,000,000,000 for the Department of Energy, to remain available through September 30, 2031.
+(b) ALLOCATION.—Amounts shall support:
   (1) Solar energy deployment: up to $1,000,000,000
   (2) Wind energy programs: up to $800,000,000
   (3) Grid modernization: up to $700,000,000
   (4) Energy efficiency standards: up to $500,000,000
 
-SECTION 5. SCIENCE AND INNOVATION AUTHORIZATION.
-(a) IN GENERAL.—There is authorized $2,000,000,000 to the National Science Foundation over 5 fiscal years.
-(b) ALLOCATION.—Funds shall be directed toward:
+SECTION 5. SCIENCE AND INNOVATION PUBLIC CREDIT LINE.
+(a) IN GENERAL.—There is hereby appropriated, as a Public Credit line, $2,000,000,000 for the National Science Foundation, to remain available through September 30, 2031.
+(b) ALLOCATION.—Amounts shall be directed toward:
   (1) STEM workforce development: up to $800,000,000
   (2) Materials science research: up to $500,000,000
   (3) AI safety research: up to $400,000,000
-  (4) Climate modeling: up to $300,000,000`;
+  (4) Climate modeling: up to $300,000,000
+
+SECTION 6. DRAWS AND DISBURSEMENT.
+(a) ATM EXCLUSIVITY.—eCoin draws against the credit lines established by this Act shall be made exclusively through Congress's Treasury ATM, pursuant to a Public Credit Card issued and administered under the ATM Access Protocol.
+(b) ANTIDEFICIENCY.—No agency may obligate or expend amounts in excess of eCoin balances held on its ePurse.
+(c) PUBLISHING.—Each agency shall record its spending on its Federated Federal Ledger node, synced to the Public Statement and Account.`;
 
 const BILL_2_TEXT = `PUBLIC HEALTH EMERGENCY PREPAREDNESS ACT
 
@@ -457,28 +582,31 @@ Congress finds the following:
 (2) Federal health agencies require dedicated, transparent funding streams.
 (3) Environmental health infrastructure is integral to disease prevention.
 
-SECTION 3. HEALTH EMERGENCY PREPAREDNESS AUTHORIZATION.
-(a) IN GENERAL.—There is authorized $5,000,000,000 to the Department of Health and Human Services over 4 fiscal years.
-(b) ALLOCATION.—Funds shall be allocated as follows:
+SECTION 3. HEALTH EMERGENCY PREPAREDNESS PUBLIC CREDIT LINE.
+(a) IN GENERAL.—There is hereby appropriated, as a Public Credit line recorded on the Congressional Fiscal Record, $5,000,000,000 for the Department of Health and Human Services, to remain available through September 30, 2030.
+(b) ALLOCATION.—Amounts shall be allocated as follows:
   (1) Strategic national stockpile: up to $1,500,000,000
   (2) Hospital surge capacity: up to $1,500,000,000
   (3) Healthcare workforce: up to $1,200,000,000
   (4) Disease surveillance systems: up to $800,000,000
 
-SECTION 4. ENVIRONMENTAL HEALTH AUTHORIZATION.
-(a) IN GENERAL.—There is authorized $2,500,000,000 to the Environmental Protection Agency over 4 fiscal years.
-(b) ALLOCATION.—Funds shall support:
+SECTION 4. ENVIRONMENTAL HEALTH PUBLIC CREDIT LINE.
+(a) IN GENERAL.—There is hereby appropriated, as a Public Credit line, $2,500,000,000 for the Environmental Protection Agency, to remain available through September 30, 2030.
+(b) ALLOCATION.—Amounts shall support:
   (1) Water quality programs: up to $1,000,000,000
   (2) Air quality monitoring: up to $800,000,000
-  (3) Environmental health research: up to $700,000,000`;
+  (3) Environmental health research: up to $700,000,000
+
+SECTION 5. DRAWS AND DISBURSEMENT.
+eCoin draws against the credit lines established by this Act shall be made exclusively through Congress's Treasury ATM pursuant to a Public Credit Card, and no agency may spend in excess of eCoin balances held on its ePurse.`;
 
 const MOCK_BILLS = [
   {
     id: 'bill-001', title: 'Congressional Infrastructure & Innovation Act', status: 'draft',
     sponsor: 'Rep. Hakeem Jeffries [D-NY]', introducedDate: '2026-02-15', text: BILL_1_TEXT,
     amendments: [], votes: { billId: 'bill-001', houseVotes: [], senateVotes: [], houseCount: { yea:0,nay:0,present:0,absent:0 }, senateCount: { yea:0,nay:0,present:0,absent:0 }, presidentialAction: null, vetoOverrideHouse: null, vetoOverrideSenate: null },
-    authorizations: [
-      { id:'auth-001', billId:'bill-001', agencyId:'dot', type:'both', amountCap:5e9, timeLimit:'2031-09-30',
+    creditLines: [
+      { id:'auth-001', billId:'bill-001', agencyId:'dot', frozen:false, amountCap:5e9, timeLimit:'2031-09-30',
         restrictions:['No funds for private toll road construction','Minimum 30% allocation to rural areas','All projects must comply with Buy America provisions'],
         categories:[
           {id:'cat-001',label:'Bridge & Highway Repair',parentCategory:null,quantitativeCap:2e9,qualitativeRules:['Priority given to structurally deficient bridges','Must follow FHWA design standards']},
@@ -486,7 +614,7 @@ const MOCK_BILLS = [
           {id:'cat-003',label:'Rail Infrastructure',parentCategory:null,quantitativeCap:1e9,qualitativeRules:['Includes passenger and freight rail','Amtrak eligible']},
           {id:'cat-004',label:'Rural Connectivity',parentCategory:null,quantitativeCap:5e8,qualitativeRules:['Counties with population under 50,000','Road and bridge focus']}
         ], color:'#2563eb' },
-      { id:'auth-002', billId:'bill-001', agencyId:'doe', type:'both', amountCap:3e9, timeLimit:'2031-09-30',
+      { id:'auth-002', billId:'bill-001', agencyId:'doe', frozen:false, amountCap:3e9, timeLimit:'2031-09-30',
         restrictions:['No funding for fossil fuel expansion','All projects must demonstrate measurable emissions reduction','Prevailing wage requirements apply'],
         categories:[
           {id:'cat-005',label:'Solar Energy Deployment',parentCategory:null,quantitativeCap:1e9,qualitativeRules:['Community solar prioritized','Domestic panel manufacturing preference']},
@@ -494,7 +622,7 @@ const MOCK_BILLS = [
           {id:'cat-007',label:'Grid Modernization',parentCategory:null,quantitativeCap:7e8,qualitativeRules:['Smart grid technology focus','Cybersecurity standards mandatory']},
           {id:'cat-008',label:'Energy Efficiency Standards',parentCategory:null,quantitativeCap:5e8,qualitativeRules:['Building retrofit programs','Appliance standard development']}
         ], color:'#16a34a' },
-      { id:'auth-003', billId:'bill-001', agencyId:'nsf', type:'both', amountCap:2e9, timeLimit:'2031-09-30',
+      { id:'auth-003', billId:'bill-001', agencyId:'nsf', frozen:false, amountCap:2e9, timeLimit:'2031-09-30',
         restrictions:['Research must be publicly accessible','No classified military research','Minimum 20% to early-career researchers'],
         categories:[
           {id:'cat-009',label:'STEM Workforce Development',parentCategory:null,quantitativeCap:8e8,qualitativeRules:['K-12 and higher education','Focus on underrepresented groups']},
@@ -508,8 +636,8 @@ const MOCK_BILLS = [
     id: 'bill-002', title: 'Public Health Emergency Preparedness Act', status: 'draft',
     sponsor: 'Rep. Rosa DeLauro [D-CT]', introducedDate: '2026-02-20', text: BILL_2_TEXT,
     amendments: [], votes: { billId: 'bill-002', houseVotes: [], senateVotes: [], houseCount: { yea:0,nay:0,present:0,absent:0 }, senateCount: { yea:0,nay:0,present:0,absent:0 }, presidentialAction: null, vetoOverrideHouse: null, vetoOverrideSenate: null },
-    authorizations: [
-      { id:'auth-004', billId:'bill-002', agencyId:'hhs', type:'both', amountCap:5e9, timeLimit:'2030-09-30',
+    creditLines: [
+      { id:'auth-004', billId:'bill-002', agencyId:'hhs', frozen:false, amountCap:5e9, timeLimit:'2030-09-30',
         restrictions:['No funds for non-health related purposes','Annual reporting to Congress required','Inspector General oversight mandatory'],
         categories:[
           {id:'cat-013',label:'Strategic National Stockpile',parentCategory:null,quantitativeCap:1.5e9,qualitativeRules:['PPE and medical countermeasures','Rotation and maintenance included']},
@@ -517,7 +645,7 @@ const MOCK_BILLS = [
           {id:'cat-015',label:'Healthcare Workforce',parentCategory:null,quantitativeCap:1.2e9,qualitativeRules:['Loan forgiveness programs','Rural health worker incentives']},
           {id:'cat-016',label:'Disease Surveillance Systems',parentCategory:null,quantitativeCap:8e8,qualitativeRules:['Real-time data integration','Interoperability with state systems']}
         ], color:'#dc2626' },
-      { id:'auth-005', billId:'bill-002', agencyId:'epa', type:'both', amountCap:2.5e9, timeLimit:'2030-09-30',
+      { id:'auth-005', billId:'bill-002', agencyId:'epa', frozen:false, amountCap:2.5e9, timeLimit:'2030-09-30',
         restrictions:['Must coordinate with state environmental agencies','Environmental justice communities prioritized','Peer-reviewed science basis required'],
         categories:[
           {id:'cat-017',label:'Water Quality Programs',parentCategory:null,quantitativeCap:1e9,qualitativeRules:['PFAS remediation priority','Lead pipe replacement']},
@@ -532,11 +660,12 @@ function getInitialState() {
   return {
     bills: JSON.parse(JSON.stringify(MOCK_BILLS)),
     agencies: JSON.parse(JSON.stringify(AGENCIES)),
-    refinements: [],
+    cards: [],
     transactions: [],
     currentView: 'legislative',
     selectedBillId: null,
-    selectedAgencyId: null
+    selectedAgencyId: null,
+    selectedLineId: null
   };
 }
 
@@ -552,9 +681,9 @@ const Store = {
   },
   subscribe(fn) { this._listeners.push(fn); return () => { this._listeners = this._listeners.filter(l => l !== fn); }; },
   _notify() { this._listeners.forEach(fn => fn(this._state)); },
-  _persist() { try { localStorage.setItem('fiscal-ledger-state', JSON.stringify(this._state)); } catch(e) {} },
+  _persist() { try { localStorage.setItem('fiscal-ledger-state-v2', JSON.stringify(this._state)); } catch(e) {} },
   init() {
-    try { const s = localStorage.getItem('fiscal-ledger-state'); if (s) { this._state = JSON.parse(s); return; } } catch(e) {}
+    try { const s = localStorage.getItem('fiscal-ledger-state-v2'); if (s) { this._state = JSON.parse(s); return; } } catch(e) {}
     this._state = getInitialState();
   }
 };
@@ -606,31 +735,29 @@ function reducer(state, action) {
       }
       return s;
     }
-    case 'ADD_AUTHORIZATION': {
+    case 'ADD_CREDIT_LINE': {
       const b = s.bills.find(b => b.id === action.payload.billId);
-      if (b) b.authorizations.push(action.payload.authorization);
+      if (b) b.creditLines.push(action.payload.creditLine);
       return s;
     }
     case 'ENACT_BILL': {
+      // Enactment records the Public Credit lines on the Congressional Fiscal
+      // Record. No money moves: credit lines are delegations of spending
+      // POWER, not sums of dollars. eCoins only come into existence at draw
+      // time (phase 3, "Coining").
       const b = s.bills.find(b => b.id === action.payload.billId);
-      if (b) {
-        b.status = 'enacted';
-        for (const auth of b.authorizations) {
-          const ag = s.agencies.find(a => a.id === auth.agencyId);
-          if (ag) {
-            ag.creditLimit += (auth.amountCap || 0);
-            ag.authorizations.push(JSON.parse(JSON.stringify(auth)));
-          }
-        }
+      if (b) b.status = 'enacted';
+      return s;
+    }
+    case 'ISSUE_CARD': s.cards.push(action.payload); return s;
+    case 'SET_LINE_FROZEN': {
+      for (const b of s.bills) {
+        const l = b.creditLines.find(l => l.id === action.payload.lineId);
+        if (l) l.frozen = action.payload.frozen;
       }
       return s;
     }
-    case 'ADD_REFINEMENT': s.refinements.push(action.payload); return s;
-    case 'UPDATE_REFINEMENT': {
-      const r = s.refinements.find(r => r.id === action.payload.id);
-      if (r) Object.assign(r, action.payload.changes);
-      return s;
-    }
+    case 'SELECT_LINE': s.selectedLineId = action.payload; return s;
     case 'ADD_TRANSACTION': s.transactions.push(action.payload); return s;
     case 'UPDATE_TRANSACTION_STATUS': {
       const t = s.transactions.find(t => t.id === action.payload.id);
@@ -701,12 +828,12 @@ function startVoteAnimation(chamber, billId, isOverride) {
       }
       Store.dispatch({ type: 'UPDATE_VOTES', payload: { billId, votes: voteUpdate } });
 
-      // Auto-advance status
+      // Auto-advance status (passage = majority of those present and voting)
       if (!isOverride) {
         if (isHouse) {
-          Store.dispatch({ type: 'UPDATE_BILL_STATUS', payload: { billId, status: counts.yea >= 218 ? 'house_passed' : 'house_failed' } });
+          Store.dispatch({ type: 'UPDATE_BILL_STATUS', payload: { billId, status: majorityPassed(counts) ? 'house_passed' : 'house_failed' } });
         } else {
-          Store.dispatch({ type: 'UPDATE_BILL_STATUS', payload: { billId, status: counts.yea >= 51 ? 'senate_passed' : 'senate_failed' } });
+          Store.dispatch({ type: 'UPDATE_BILL_STATUS', payload: { billId, status: majorityPassed(counts) ? 'senate_passed' : 'senate_failed' } });
         }
       } else {
         // After override vote, check if both chambers overrode
@@ -742,12 +869,13 @@ function startVoteAnimation(chamber, billId, isOverride) {
 /* ========== FORM STATE (local, not persisted) ========== */
 const formState = {
   newBill: { title: '', sponsor: '', visible: false },
-  newAuth: { agencyId: '', amountCap: '', timeLimit: '', restrictions: '', type: 'both', color: '#2563eb', visible: false },
+  newLine: { agencyId: '', amountCap: '', timeLimit: '', restrictions: '', color: '#2563eb', visible: false },
   newAmendment: { author: '', description: '', oldText: '', newText: '', lineNumber: 0, visible: false },
-  transaction: { authId: '', category: '', amount: '', description: '' },
-  refinement: { subcategories: [], committeeName: '', requiredSigs: 1, signatories: [], complianceResult: null, visible: false },
+  draw: { lineId: '', amount: '', description: '' },
+  spend: { lineId: '', category: '', amount: '', description: '' },
+  collection: { amount: '', description: '' },
+  card: { subcategories: [], committeeName: '', requiredSigs: 1, signatories: [], complianceResult: null, visible: false },
   activeTab: 'authorizations',
-  selectedAuthForRefinement: null,
   expandedTxId: null
 };
 
@@ -759,8 +887,9 @@ function render() {
   html += '<div class="app-main">';
   switch (state.currentView) {
     case 'legislative': html += renderLegislative(state); break;
-    case 'committee': html += renderCommittee(state); break;
+    case 'cards': html += renderCards(state); break;
     case 'agency': html += renderAgency(state); break;
+    case 'record': html += renderRecord(state); break;
   }
   html += '</div>';
   app.innerHTML = html;
@@ -775,9 +904,10 @@ function renderHeader(state) {
       Congressional Fiscal Ledger
     </div>
     <nav class="header__nav">
-      <button class="header__tab ${v==='legislative'?'header__tab--active':''}" data-action="set-view" data-view="legislative">Legislative</button>
-      <button class="header__tab ${v==='committee'?'header__tab--active':''}" data-action="set-view" data-view="committee">Committee Refinement</button>
-      <button class="header__tab ${v==='agency'?'header__tab--active':''}" data-action="set-view" data-view="agency">Agency Spending</button>
+      <button class="header__tab ${v==='legislative'?'header__tab--active':''}" data-action="set-view" data-view="legislative">1&nbsp;Appropriating</button>
+      <button class="header__tab ${v==='cards'?'header__tab--active':''}" data-action="set-view" data-view="cards">2&nbsp;Drawing (Cards)</button>
+      <button class="header__tab ${v==='agency'?'header__tab--active':''}" data-action="set-view" data-view="agency">3&middot;4&nbsp;Coining &amp; Spending</button>
+      <button class="header__tab ${v==='record'?'header__tab--active':''}" data-action="set-view" data-view="record">5&nbsp;Publishing (Record)</button>
     </nav>
     <div class="header__actions">
       <button class="header__btn header__btn--demo" data-action="start-guided-demo">&#9654; Guided Demo</button>
@@ -800,7 +930,7 @@ function renderLegislative(state) {
       </div>
       ${formState.newBill.visible ? renderNewBillForm() : ''}
       ${bills.map(b => {
-        const totalAuth = b.authorizations.reduce((s, a) => s + (a.amountCap || 0), 0);
+        const totalAuth = b.creditLines.reduce((s, a) => s + (a.amountCap || 0), 0);
         return `<div class="sidebar-item ${b.id === state.selectedBillId ? 'sidebar-item--selected' : ''}" data-action="select-bill" data-bill-id="${b.id}">
           <div class="sidebar-item__title">${escHtml(b.title)}</div>
           <div class="sidebar-item__meta">
@@ -836,55 +966,56 @@ function renderBillDetail(bill, state) {
     </div>
     <div class="card mb-4"><div class="card__header"><h3>Bill Text</h3></div><div class="card__body"><pre class="bill-text">${escHtml(bill.text)}</pre></div></div>
     <div class="tabs">
-      <button class="tab ${tab==='authorizations'?'tab--active':''}" data-action="set-tab" data-tab="authorizations">Authorizations (${bill.authorizations.length})</button>
+      <button class="tab ${tab==='authorizations'?'tab--active':''}" data-action="set-tab" data-tab="authorizations">Public Credit Lines (${bill.creditLines.length})</button>
       <button class="tab ${tab==='amendments'?'tab--active':''}" data-action="set-tab" data-tab="amendments">Amendments (${bill.amendments.length})</button>
       <button class="tab ${tab==='vote'?'tab--active':''}" data-action="set-tab" data-tab="vote">Vote</button>
     </div>
-    ${tab === 'authorizations' ? renderAuthorizationsTab(bill, state) : ''}
+    ${tab === 'authorizations' ? renderCreditLinesTab(bill, state) : ''}
     ${tab === 'amendments' ? renderAmendmentsTab(bill) : ''}
     ${tab === 'vote' ? renderVoteTab(bill) : ''}
   </div>`;
 }
 
-function renderAuthorizationsTab(bill, state) {
-  const auths = bill.authorizations;
+function renderCreditLinesTab(bill, state) {
+  const lines = bill.creditLines;
   const agencies = state.agencies;
   return `<div>
-    ${auths.map(a => {
+    <p class="text-sm text-muted mb-4">A Public Credit line is an appropriation: a delegation of spending <em>power</em> recorded on the Congressional Fiscal Record — not a transfer of dollars. eCoins are only created when the agency later draws at Congress's Treasury ATM.</p>
+    ${lines.map(a => {
       const ag = agencies.find(ag => ag.id === a.agencyId);
       return `<div class="auth-card" style="border-left-color:${a.color}">
         <div class="auth-card__header">
           <div><div class="auth-card__title"><span class="color-dot" style="background:${a.color};margin-right:6px;vertical-align:middle;"></span>${ag ? ag.name : a.agencyId}</div>
-          <div class="auth-card__details">${a.type === 'both' ? 'Quantitative + Qualitative' : a.type} &middot; Expires ${formatDate(a.timeLimit)}</div></div>
+          <div class="auth-card__details">Public Credit line &middot; Available through ${formatDate(a.timeLimit)}${a.frozen ? ' &middot; <strong style="color:var(--red-600)">FROZEN</strong>' : ''}</div></div>
           <div class="auth-card__amount">${formatCurrency(a.amountCap)}</div>
         </div>
         <div class="auth-card__categories">${a.categories.map(c => `<span class="badge badge--slate">${escHtml(c.label)}: ${formatCurrency(c.quantitativeCap)}</span>`).join('')}</div>
         ${a.restrictions.length ? `<div class="mt-2 text-sm text-muted"><strong>Restrictions:</strong> ${a.restrictions.map(r => escHtml(r)).join(' &middot; ')}</div>` : ''}
       </div>`;
     }).join('')}
-    ${bill.status === 'draft' ? `<button class="btn btn--outline btn--sm mt-2" data-action="toggle-new-auth">${formState.newAuth.visible ? 'Cancel' : '+ Add Authorization'}</button>` : ''}
-    ${formState.newAuth.visible && bill.status === 'draft' ? renderNewAuthForm(agencies) : ''}
+    ${bill.status === 'draft' ? `<button class="btn btn--outline btn--sm mt-2" data-action="toggle-new-line">${formState.newLine.visible ? 'Cancel' : '+ Add Credit Line'}</button>` : ''}
+    ${formState.newLine.visible && bill.status === 'draft' ? renderNewLineForm(agencies) : ''}
   </div>`;
 }
 
-function renderNewAuthForm(agencies) {
+function renderNewLineForm(agencies) {
   const colors = ['#2563eb','#16a34a','#f97316','#dc2626','#7c3aed','#059669'];
   return `<div class="card mt-4" style="padding:14px;">
-    <h4 style="font-weight:700;margin-bottom:12px;">New Authorization</h4>
+    <h4 style="font-weight:700;margin-bottom:12px;">New Public Credit Line</h4>
     <div class="form-row">
       <div class="form-group"><label class="form-label">Agency</label>
-        <select class="form-select" id="new-auth-agency"><option value="">Select agency...</option>${agencies.map(a => `<option value="${a.id}" ${formState.newAuth.agencyId===a.id?'selected':''}>${a.name}</option>`).join('')}</select>
+        <select class="form-select" id="new-line-agency"><option value="">Select agency...</option>${agencies.map(a => `<option value="${a.id}" ${formState.newLine.agencyId===a.id?'selected':''}>${a.name}</option>`).join('')}</select>
       </div>
-      <div class="form-group"><label class="form-label">Amount Cap ($)</label><input class="form-input" id="new-auth-amount" type="number" placeholder="e.g. 1000000000" value="${formState.newAuth.amountCap}"></div>
+      <div class="form-group"><label class="form-label">Amount Cap ($)</label><input class="form-input" id="new-line-amount" type="number" placeholder="e.g. 1000000000" value="${formState.newLine.amountCap}"></div>
     </div>
     <div class="form-row">
-      <div class="form-group"><label class="form-label">Time Limit</label><input class="form-input" id="new-auth-time" type="date" value="${formState.newAuth.timeLimit}"></div>
+      <div class="form-group"><label class="form-label">Available Through (period of availability)</label><input class="form-input" id="new-line-time" type="date" value="${formState.newLine.timeLimit}"></div>
       <div class="form-group"><label class="form-label">Color</label>
-        <div class="flex gap-1 mt-2">${colors.map(c => `<button class="color-dot" style="background:${c};width:24px;height:24px;border:2px solid ${formState.newAuth.color===c?'var(--gray-950)':'transparent'};cursor:pointer;" data-action="set-auth-color" data-color="${c}"></button>`).join('')}</div>
+        <div class="flex gap-1 mt-2">${colors.map(c => `<button class="color-dot" style="background:${c};width:24px;height:24px;border:2px solid ${formState.newLine.color===c?'var(--gray-950)':'transparent'};cursor:pointer;" data-action="set-line-color" data-color="${c}"></button>`).join('')}</div>
       </div>
     </div>
-    <div class="form-group"><label class="form-label">Restrictions (one per line)</label><textarea class="form-textarea" id="new-auth-restrictions" placeholder="No funds for...">${escHtml(formState.newAuth.restrictions)}</textarea></div>
-    <button class="btn btn--primary" data-action="create-auth">Add Authorization</button>
+    <div class="form-group"><label class="form-label">Restrictions (one per line)</label><textarea class="form-textarea" id="new-line-restrictions" placeholder="No funds for...">${escHtml(formState.newLine.restrictions)}</textarea></div>
+    <button class="btn btn--primary" data-action="create-line">Add Credit Line</button>
   </div>`;
 }
 
@@ -935,8 +1066,8 @@ function renderVoteTab(bill) {
     ${renderVoteSection(bill, 'senate', v, s)}
     ${renderPresidentialSection(bill, v, s)}
     ${v.presidentialAction === 'vetoed' ? renderOverrideSection(bill, v, s) : ''}
-    ${s === 'signed' || (s === 'enacted' && v.presidentialAction === 'signed') ? '<div class="alert alert--success mt-4"><strong>Bill Enacted.</strong> All authorizations are now active. View them in the Agency Spending dashboard.</div>' : ''}
-    ${s === 'enacted' && isVetoOverridden(v) ? '<div class="alert alert--success mt-4"><strong>Veto Overridden — Bill Enacted.</strong> Both chambers achieved 2/3 supermajority. Authorizations are now active.</div>' : ''}
+    ${s === 'signed' || (s === 'enacted' && v.presidentialAction === 'signed') ? '<div class="alert alert--success mt-4"><strong>Bill Enacted.</strong> Its Public Credit lines are now recorded on the Congressional Fiscal Record. Next step: Congress issues a Public Credit Card (Drawing phase) before the agency can withdraw eCoins.</div>' : ''}
+    ${s === 'enacted' && isVetoOverridden(v) ? '<div class="alert alert--success mt-4"><strong>Veto Overridden — Bill Enacted.</strong> Both chambers reached two-thirds of Members present and voting. Public Credit lines are now live on the Fiscal Record.</div>' : ''}
   </div>`;
 }
 
@@ -975,19 +1106,20 @@ function renderStepper(steps) {
 function renderVoteSection(bill, chamber, votes, status) {
   const isHouse = chamber === 'house';
   const total = isHouse ? 435 : 100;
-  const threshold = isHouse ? 218 : 51;
   const label = isHouse ? 'House of Representatives' : 'United States Senate';
   const count = isHouse ? votes.houseCount : votes.senateCount;
   const cast = count ? count.yea + count.nay + count.present + count.absent : 0;
   const canVote = isHouse ?
     ['draft','house_floor','house_voting'].includes(status) :
     ['house_passed','senate_floor','senate_voting'].includes(status);
-  const passed = isHouse ? (count && count.yea >= 218) : (count && count.yea >= 51);
+  const passed = majorityPassed(count);
   const voteDone = cast >= total;
+  const needed = majorityNeeded(count);
 
   return `<div class="card mb-4">
     <div class="card__header"><h3>${label}</h3><span class="text-sm text-muted"><span id="${chamber}-cast">${cast}</span> / ${total} votes cast</span></div>
     <div class="card__body">
+      <p class="text-xs text-muted mb-2">Passage requires a majority of Members present and voting (a quorum being present)${isHouse ? '' : ' — the Vice President breaks a tie. Most Senate business also needs 60 votes to invoke cloture; the NDFR would flip that presumption for budgetary law'}.</p>
       <div class="tally">
         <div class="tally__counts">
           <span style="color:var(--green-600)">Yea: <span id="${chamber}-yea-count">${count ? count.yea : 0}</span></span>
@@ -998,10 +1130,10 @@ function renderVoteSection(bill, chamber, votes, status) {
           <div class="tally__yea" id="${chamber}-yea-bar" style="width:${count ? count.yea/total*100 : 0}%"></div>
           <div class="tally__nay" id="${chamber}-nay-bar" style="width:${count ? count.nay/total*100 : 0}%"></div>
           <div class="tally__other" id="${chamber}-other-bar" style="width:${count ? (count.present+count.absent)/total*100 : 0}%"></div>
-          <div class="tally__threshold" style="left:${threshold/total*100}%"><span class="tally__threshold-label">${threshold}</span></div>
+          <div class="tally__threshold" style="left:50%"><span class="tally__threshold-label">majority</span></div>
         </div>
       </div>
-      ${voteDone ? `<div class="alert ${passed ? 'alert--success' : 'alert--error'}">${passed ? 'PASSED' : 'FAILED'}: ${count.yea} yea, ${count.nay} nay (${threshold} needed)</div>` : ''}
+      ${voteDone ? `<div class="alert ${passed ? 'alert--success' : 'alert--error'}">${passed ? 'PASSED' : 'FAILED'}: ${count.yea} yea, ${count.nay} nay &mdash; ${needed} of the ${count.yea + count.nay} Members voting needed</div>` : ''}
       ${canVote && !voteDone ? `<button class="btn btn--primary" data-action="simulate-vote" data-chamber="${chamber}" data-bill-id="${bill.id}" ${voteAnimating ? 'disabled' : ''}>Simulate ${isHouse ? 'House' : 'Senate'} Vote</button>` : ''}
     </div>
   </div>`;
@@ -1032,14 +1164,15 @@ function renderOverrideSection(bill, votes, status) {
     const count = ch.count;
     const cast = count ? count.yea + count.nay + count.present + count.absent : 0;
     const voteDone = cast >= ch.total;
-    const present = count ? count.yea + count.nay + count.present : 0;
-    const threshold = present > 0 ? Math.ceil(present * 2 / 3) : Math.ceil(ch.total * 2 / 3);
-    const passed = count && count.yea >= threshold;
+    // 2/3 of Members present AND voting — 'present' votes count toward the
+    // quorum but are excluded from the override denominator.
+    const threshold = count && (count.yea + count.nay) > 0 ? overrideThreshold(count) : Math.ceil(ch.total * 2 / 3);
+    const passed = count && overridePassed(count);
     const canVote = ch.key === 'house' ? ['vetoed','veto_override_house'].includes(status) && !votes.vetoOverrideHouse :
       ['veto_override_house','veto_override_senate'].includes(status) && votes.vetoOverrideHouse && !votes.vetoOverrideSenate;
 
     return `<div class="card mb-4">
-      <div class="card__header"><h3>${ch.label} (2/3 required)</h3><span class="text-sm text-muted"><span id="${ch.prefix}-cast">${cast}</span> / ${ch.total} votes cast</span></div>
+      <div class="card__header"><h3>${ch.label} (2/3 of those voting)</h3><span class="text-sm text-muted"><span id="${ch.prefix}-cast">${cast}</span> / ${ch.total} votes cast</span></div>
       <div class="card__body">
         <div class="tally">
           <div class="tally__counts">
@@ -1054,70 +1187,72 @@ function renderOverrideSection(bill, votes, status) {
             <div class="tally__threshold" style="left:66.7%"><span class="tally__threshold-label">2/3</span></div>
           </div>
         </div>
-        ${voteDone ? `<div class="alert ${passed ? 'alert--success' : 'alert--error'}">${passed ? 'OVERRIDE PASSED' : 'OVERRIDE FAILED'}: ${count.yea} yea, ${count.nay} nay (${threshold} needed)</div>` : ''}
+        ${voteDone ? `<div class="alert ${passed ? 'alert--success' : 'alert--error'}">${passed ? 'OVERRIDE PASSED' : 'OVERRIDE FAILED'}: ${count.yea} yea, ${count.nay} nay &mdash; ${threshold} of the ${count.yea + count.nay} voting needed</div>` : ''}
         ${canVote && !voteDone ? `<button class="btn btn--primary" data-action="simulate-override" data-chamber="${ch.key}" data-bill-id="${bill.id}" ${voteAnimating ? 'disabled' : ''}>Simulate ${ch.key === 'house' ? 'House' : 'Senate'} Override</button>` : ''}
       </div>
     </div>`;
   }).join('');
 }
 
-/* ========== COMMITTEE VIEW ========== */
-function renderCommittee(state) {
+/* ========== CARD ISSUANCE VIEW (NDFR phase 2: Drawing) ========== */
+// After enactment the agency cannot touch the ATM yet: it must request a
+// Public Credit Card ("Purse Key"). Congress — acting through its committees
+// and legislative-branch organs (GAO, CBO, Library of Congress) — negotiates
+// the Card's Terms & Conditions with the agency and issues it under the ATM
+// Access Protocol. This is the intra-legislative counterpart of what OMB
+// apportionment does today (in the real system, post-enactment subdivision is
+// OMB/agency work under 31 U.S.C. 1512-1514, not a congressional committee's).
+function renderCards(state) {
   const enactedBills = state.bills.filter(b => b.status === 'enacted');
-  const selAuth = formState.selectedAuthForRefinement;
-  let auth = null, bill = null, agency = null;
-  if (selAuth) {
-    for (const b of enactedBills) {
-      const a = b.authorizations.find(a => a.id === selAuth);
-      if (a) { auth = a; bill = b; agency = state.agencies.find(ag => ag.id === a.agencyId); break; }
-    }
-  }
+  const selLine = state.selectedLineId;
+  const line = selLine ? findCreditLine(state, selLine) : null;
+  const agency = line ? state.agencies.find(ag => ag.id === line.agencyId) : null;
   return `<div class="split-view">
     <div class="sidebar">
-      <div class="sidebar-header"><h2>Enacted Bills</h2></div>
-      ${enactedBills.length === 0 ? '<div class="text-sm text-muted" style="padding:20px;">No enacted bills. Pass legislation in the Legislative phase first.</div>' : ''}
+      <div class="sidebar-header"><h2>Enacted Credit Lines</h2></div>
+      ${enactedBills.length === 0 ? '<div class="text-sm text-muted" style="padding:20px;">No enacted credit lines. Pass legislation in the Appropriating phase first.</div>' : ''}
       ${enactedBills.map(b => `
         <div class="refinement-tree-bill">${escHtml(b.title)}</div>
-        ${b.authorizations.map(a => {
+        ${b.creditLines.map(a => {
           const ag = state.agencies.find(ag => ag.id === a.agencyId);
-          const existing = state.refinements.filter(r => r.authorizationId === a.id);
-          return `<div class="refinement-tree-item ${selAuth === a.id ? 'refinement-tree-item--selected' : ''}" data-action="select-auth-refinement" data-auth-id="${a.id}">
+          const card = cardForLine(state, a.id);
+          return `<div class="refinement-tree-item ${selLine === a.id ? 'refinement-tree-item--selected' : ''}" data-action="select-line-card" data-line-id="${a.id}">
             <span class="color-dot" style="background:${a.color};margin-right:6px;"></span>
             ${ag ? ag.abbreviation : a.agencyId} — ${formatCurrency(a.amountCap)}
-            ${existing.length > 0 ? `<span class="badge badge--green badge--sm" style="margin-left:6px;">${existing.filter(r => r.status === 'approved').length} approved</span>` : ''}
+            ${card ? '<span class="badge badge--green" style="margin-left:6px;">Card issued</span>' : '<span class="badge badge--amber" style="margin-left:6px;">No card</span>'}
           </div>`;
         }).join('')}
       `).join('')}
     </div>
     <div class="content">
-      ${auth ? renderRefinementPanel(auth, bill, agency, state) : '<div class="empty-state"><p>Select an authorization to refine</p></div>'}
+      ${line && line.billStatus === 'enacted' ? renderCardPanel(line, agency, state) : '<div class="empty-state"><p>Select an enacted credit line to issue its Public Credit Card</p></div>'}
     </div>
   </div>`;
 }
 
-function renderRefinementPanel(auth, bill, agency, state) {
-  const existing = state.refinements.filter(r => r.authorizationId === auth.id);
-  const fs = formState.refinement;
+function renderCardPanel(line, agency, state) {
+  const card = cardForLine(state, line.id);
+  const fs = formState.card;
   return `<div class="content-inner">
-    <h2 style="font-size:18px;font-weight:700;margin-bottom:4px;">Committee Refinement</h2>
-    <p class="text-sm text-muted mb-4">Break down broad authorization into specific spending subcategories.</p>
+    <h2 style="font-size:18px;font-weight:700;margin-bottom:4px;">Public Credit Card Issuance</h2>
+    <p class="text-sm text-muted mb-4">The Card is the "Purse Key": it encodes the Terms &amp; Conditions under which ${agency ? escHtml(agency.abbreviation) : 'the agency'} may withdraw new eCoins from Congress's Treasury ATM against this credit line. Issuance is administered by congressional committees and legislative-branch organs under the ATM Access Protocol, with Budget Key signatures.</p>
     <div class="card mb-4">
-      <div class="card__header"><h3>Original Authorization</h3></div>
+      <div class="card__header"><h3>Public Credit Line (from the Fiscal Record)</h3></div>
       <div class="card__body">
-        <div class="flex justify-between mb-2"><span><span class="color-dot" style="background:${auth.color};margin-right:6px;"></span><strong>${agency ? agency.name : auth.agencyId}</strong></span><strong>${formatCurrency(auth.amountCap)}</strong></div>
-        <p class="text-sm text-muted mb-2">Expires: ${formatDate(auth.timeLimit)}</p>
-        <div class="section-title" style="margin-top:12px;">Existing Categories</div>
-        <div class="flex flex-wrap gap-1">${auth.categories.map(c => `<span class="badge badge--slate">${escHtml(c.label)}: ${formatCurrency(c.quantitativeCap)}</span>`).join('')}</div>
-        ${auth.restrictions.length ? `<div class="section-title" style="margin-top:12px;">Restrictions</div><ul class="text-sm text-muted" style="margin-left:16px;list-style:disc;">${auth.restrictions.map(r => `<li>${escHtml(r)}</li>`).join('')}</ul>` : ''}
+        <div class="flex justify-between mb-2"><span><span class="color-dot" style="background:${line.color};margin-right:6px;"></span><strong>${agency ? agency.name : line.agencyId}</strong></span><strong>${formatCurrency(line.amountCap)}</strong></div>
+        <p class="text-sm text-muted mb-2">Available through: ${formatDate(line.timeLimit)} &middot; ${escHtml(line.billTitle || '')}</p>
+        <div class="section-title" style="margin-top:12px;">Statutory Categories</div>
+        <div class="flex flex-wrap gap-1">${line.categories.map(c => `<span class="badge badge--slate">${escHtml(c.label)}: ${formatCurrency(c.quantitativeCap)}</span>`).join('')}</div>
+        ${line.restrictions.length ? `<div class="section-title" style="margin-top:12px;">Statutory Restrictions</div><ul class="text-sm text-muted" style="margin-left:16px;list-style:disc;">${line.restrictions.map(r => `<li>${escHtml(r)}</li>`).join('')}</ul>` : ''}
       </div>
     </div>
-    ${existing.filter(r => r.status === 'approved').map(r => `<div class="alert alert--success mb-2"><strong>Approved Refinement</strong> by ${escHtml(r.committeeName)} — ${r.subcategories.length} subcategories defined, ${r.signatories.length} signatures collected.</div>`).join('')}
+    ${card ? `<div class="alert alert--success mb-4"><strong>Card Active.</strong> Issued via ${escHtml(card.committeeName)} — ${card.termsAndConditions.length} Terms &amp; Conditions subcategories, ${card.signatories.length} Budget Key signatures. ${agency ? escHtml(agency.abbreviation) : 'The agency'} can now draw eCoins at the Treasury ATM.</div>` : `
     <div class="card">
-      <div class="card__header"><h3>New Refinement</h3><button class="btn btn--outline btn--sm" data-action="add-subcategory">+ Add Subcategory</button></div>
+      <div class="card__header"><h3>Negotiate Terms &amp; Conditions</h3><button class="btn btn--outline btn--sm" data-action="add-subcategory">+ Add Subcategory</button></div>
       <div class="card__body">
-        <div class="form-group"><label class="form-label">Committee Name</label><input class="form-input" id="ref-committee" placeholder="e.g. Senate Appropriations" value="${escHtml(fs.committeeName)}"></div>
-        <div class="section-title">Subcategories</div>
-        ${fs.subcategories.length === 0 ? '<p class="text-sm text-muted mb-4">Add subcategories to refine this authorization.</p>' : ''}
+        <div class="form-group"><label class="form-label">Issuing Body</label><input class="form-input" id="card-committee" placeholder="e.g. Joint Committee on the Fiscal Record (with GAO/CBO support)" value="${escHtml(fs.committeeName)}"></div>
+        <div class="section-title">Terms &amp; Conditions Subcategories</div>
+        ${fs.subcategories.length === 0 ? '<p class="text-sm text-muted mb-4">Add subcategories to compile the statutory credit line into executable spending terms. These bind the agency at spend time.</p>' : ''}
         ${fs.subcategories.map((sc, i) => `<div class="card mb-2" style="padding:10px;background:var(--slate-50);">
           <div class="form-row">
             <div class="form-group"><label class="form-label">Label</label><input class="form-input subcat-label" data-idx="${i}" value="${escHtml(sc.label)}"></div>
@@ -1126,129 +1261,156 @@ function renderRefinementPanel(auth, bill, agency, state) {
           </div>
           <div class="form-group"><label class="form-label">Qualitative Rules (one per line)</label><textarea class="form-textarea subcat-rules" data-idx="${i}" rows="2">${escHtml((sc.qualitativeRules || []).join('\n'))}</textarea></div>
         </div>`).join('')}
-        <div class="section-title mt-4">Multi-Signature Requirements</div>
-        <div class="form-group"><label class="form-label">Required Signatures</label><input class="form-input" id="ref-req-sigs" type="number" min="1" value="${fs.requiredSigs}" style="width:80px;"></div>
-        <div class="form-inline mb-2"><input class="form-input" id="ref-new-sig" placeholder="Signatory name..."><button class="btn btn--outline btn--sm" data-action="add-signatory">Add</button></div>
+        <div class="section-title mt-4">Budget Key Signatures</div>
+        <p class="text-xs text-muted mb-2">Card issuance is co-signed with secure digital "Budget Keys" — negotiated between the legislative issuer and the receiving executive agency.</p>
+        <div class="form-group"><label class="form-label">Required Signatures</label><input class="form-input" id="card-req-sigs" type="number" min="1" value="${fs.requiredSigs}" style="width:80px;"></div>
+        <div class="form-inline mb-2"><input class="form-input" id="card-new-sig" placeholder="Signatory name..."><button class="btn btn--outline btn--sm" data-action="add-signatory">Add</button></div>
         ${fs.signatories.map((sig, i) => `<div class="sig-check"><input type="checkbox" checked disabled> <span>${escHtml(sig)}</span> <button class="btn btn--danger btn--xs" data-action="remove-signatory" data-idx="${i}">&times;</button></div>`).join('')}
         ${fs.complianceResult ? `<div class="alert ${fs.complianceResult.passed ? 'alert--success' : 'alert--error'} mt-4">
-          <strong>Compliance Check: ${fs.complianceResult.passed ? 'PASSED' : 'FAILED'}</strong>
+          <strong>ATM Access Protocol Check: ${fs.complianceResult.passed ? 'PASSED' : 'FAILED'}</strong>
           ${fs.complianceResult.violations.length ? `<ul>${fs.complianceResult.violations.map(v => `<li>${escHtml(v)}</li>`).join('')}</ul>` : ''}
           <div class="text-xs mt-2 text-muted">Checked: ${fs.complianceResult.checkedAgainst.join(', ')}</div>
         </div>` : ''}
         <div class="flex gap-2 mt-4">
-          <button class="btn btn--outline" data-action="run-compliance" data-auth-id="${auth.id}">Run Compliance Check</button>
-          <button class="btn btn--primary" data-action="submit-refinement" data-auth-id="${auth.id}" ${!fs.complianceResult || !fs.complianceResult.passed || fs.signatories.length < fs.requiredSigs ? 'disabled' : ''}>Submit Refinement</button>
+          <button class="btn btn--outline" data-action="run-compliance" data-line-id="${line.id}">Run Protocol Check</button>
+          <button class="btn btn--primary" data-action="issue-card" data-line-id="${line.id}" ${!fs.complianceResult || !fs.complianceResult.passed || fs.signatories.length < fs.requiredSigs ? 'disabled' : ''}>Issue Public Credit Card</button>
         </div>
       </div>
-    </div>
+    </div>`}
   </div>`;
 }
 
-/* ========== AGENCY VIEW ========== */
+/* ========== AGENCY VIEW (NDFR phases 3-4: Coining & Spending) ========== */
 function renderAgency(state) {
-  const funded = state.agencies.filter(a => a.creditLimit > 0);
-  const selected = funded.find(a => a.id === state.selectedAgencyId) || (funded.length === 1 ? funded[0] : null);
+  const withCredit = state.agencies.filter(a => agencyCreditLines(state, a.id).length > 0);
+  const selected = withCredit.find(a => a.id === state.selectedAgencyId) || (withCredit.length === 1 ? withCredit[0] : null);
   return `<div class="split-view">
     <div class="sidebar">
-      <div class="sidebar-header"><h2>Funded Agencies</h2></div>
-      ${funded.length === 0 ? '<div class="text-sm text-muted" style="padding:20px;">No funded agencies. Enact legislation first to fund agencies.</div>' : ''}
-      ${funded.map(a => {
-        const spent = state.transactions.filter(t => t.agencyId === a.id && t.status === 'approved').reduce((s, t) => s + t.amount, 0);
-        const pct = a.creditLimit > 0 ? (spent / a.creditLimit * 100).toFixed(1) : 0;
+      <div class="sidebar-header"><h2>Agencies with Public Credit</h2></div>
+      ${withCredit.length === 0 ? '<div class="text-sm text-muted" style="padding:20px;">No agency holds Public Credit yet. Enact legislation in the Appropriating phase first.</div>' : ''}
+      ${withCredit.map(a => {
+        const lines = agencyCreditLines(state, a.id);
+        const cap = lines.reduce((s, l) => s + (l.amountCap || 0), 0);
+        const drawn = lines.reduce((s, l) => s + drawnOnLine(l.id, state.transactions), 0);
+        const balance = ePurseBalance(a.id, state.transactions);
+        const pct = cap > 0 ? (drawn / cap * 100).toFixed(1) : 0;
         return `<div class="sidebar-item ${a.id === (selected?.id) ? 'sidebar-item--selected' : ''}" data-action="select-agency" data-agency-id="${a.id}">
           <div class="sidebar-item__title">${a.abbreviation} — ${a.name}</div>
-          <div class="sidebar-item__meta mb-2"><span>${formatCurrency(a.creditLimit)} authorized</span></div>
+          <div class="sidebar-item__meta mb-2"><span>${formatCurrency(cap)} credit &middot; ePurse ${formatCurrency(balance)}</span></div>
           <div class="progress"><div class="progress__fill" style="width:${pct}%;background:${pct > 80 ? 'var(--red-500)' : pct > 50 ? 'var(--amber-500)' : 'var(--green-500)'}"></div></div>
-          <div class="text-xs text-muted mt-2">${formatCurrency(spent)} spent (${pct}%)</div>
+          <div class="text-xs text-muted mt-2">${formatCurrency(drawn)} drawn (${pct}% of credit)</div>
         </div>`;
       }).join('')}
     </div>
     <div class="content">
-      ${selected ? renderAgencyDashboard(selected, state) : '<div class="empty-state"><p>Select an agency to view spending dashboard</p></div>'}
+      ${selected ? renderAgencyDashboard(selected, state) : '<div class="empty-state"><p>Select an agency to open its ePurse and ATM terminal</p></div>'}
     </div>
   </div>`;
 }
 
 function renderAgencyDashboard(agency, state) {
   const txs = state.transactions.filter(t => t.agencyId === agency.id);
-  const spent = txs.filter(t => t.status === 'approved').reduce((s, t) => s + t.amount, 0);
-  const remaining = agency.creditLimit - spent;
-  const pct = agency.creditLimit > 0 ? (spent / agency.creditLimit * 100).toFixed(1) : 0;
-  const fs = formState.transaction;
-  const auths = agency.authorizations || [];
+  const lines = agencyCreditLines(state, agency.id);
+  const totalCap = lines.reduce((s, l) => s + (l.amountCap || 0), 0);
+  const totalDrawn = lines.reduce((s, l) => s + drawnOnLine(l.id, state.transactions), 0);
+  const totalSpent = txs.filter(t => t.type === 'spend' && t.status === 'approved').reduce((s, t) => s + t.amount, 0);
+  const balance = ePurseBalance(agency.id, state.transactions);
+  const fsD = formState.draw;
+  const fsS = formState.spend;
+  const spendLine = lines.find(l => l.id === fsS.lineId);
+  const spendCard = spendLine ? cardForLine(state, spendLine.id) : null;
+  const spendCats = spendCard && spendCard.termsAndConditions.length ? spendCard.termsAndConditions : (spendLine ? spendLine.categories : []);
 
   return `<div class="content-inner">
     <h2 style="font-size:18px;font-weight:700;margin-bottom:4px;">${agency.name}</h2>
-    <p class="text-sm text-muted mb-4">${agency.abbreviation}</p>
+    <p class="text-sm text-muted mb-4">${agency.abbreviation} &middot; locally hosted ePurse node on the Federated Federal Ledger</p>
     <div class="card mb-4">
-      <div class="card__header"><h3>Credit Overview</h3></div>
+      <div class="card__header"><h3>ePurse (hardware wallet)</h3></div>
       <div class="card__body">
-        <div class="credit-bar">
-          <div class="credit-bar__header"><span class="credit-bar__label">Total Utilization</span><span class="credit-bar__value">${formatCurrency(spent)} / ${formatCurrency(agency.creditLimit)}</span></div>
-          <div class="credit-bar__track"><div class="credit-bar__fill" style="width:${pct}%;background:${pct > 80 ? 'var(--red-500)' : pct > 50 ? 'var(--amber-500)' : 'var(--blue-600)'}"></div><span class="credit-bar__pct">${pct}%</span></div>
-        </div>
-        <div class="flex justify-between text-sm mt-2"><span>Remaining: <strong>${formatCurrency(remaining)}</strong></span></div>
+        <div class="flex justify-between text-sm mb-2"><span>eCoins held: <strong style="font-size:16px;">${formatCurrency(balance)}</strong></span><span class="text-muted">drawn ${formatCurrency(totalDrawn)} &middot; spent ${formatCurrency(totalSpent)}</span></div>
+        <p class="text-xs text-muted">eCoins are created <em>de novo</em> at the ATM when drawn, and can only be spent from this balance — the agency can never spend money it has not drawn (Antideficiency analogue).</p>
       </div>
     </div>
-    ${auths.length > 0 ? `<div class="card mb-4"><div class="card__header"><h3>Authorization Breakdown</h3></div><div class="card__body">
-      ${auths.map(a => {
-        const authSpent = txs.filter(t => t.authorizationId === a.id && t.status === 'approved').reduce((s, t) => s + t.amount, 0);
-        const authPct = a.amountCap > 0 ? (authSpent / a.amountCap * 100).toFixed(1) : 0;
+    ${lines.length > 0 ? `<div class="card mb-4"><div class="card__header"><h3>Public Credit Lines</h3><span class="text-sm text-muted">${formatCurrency(totalCap)} total credit</span></div><div class="card__body">
+      ${lines.map(a => {
+        const card = cardForLine(state, a.id);
+        const lineDrawn = drawnOnLine(a.id, state.transactions);
+        const drawnPct = a.amountCap > 0 ? (lineDrawn / a.amountCap * 100).toFixed(1) : 0;
+        const cats = card && card.termsAndConditions.length ? card.termsAndConditions : a.categories;
         return `<div class="auth-card mb-2" style="border-left-color:${a.color}">
-          <div class="auth-card__header"><span class="auth-card__title"><span class="color-dot" style="background:${a.color};margin-right:6px;"></span>${formatCurrency(a.amountCap)} authorization</span><span class="text-sm">${authPct}% used</span></div>
-          <div class="progress mb-2"><div class="progress__fill" style="width:${authPct}%;background:${a.color}"></div></div>
-          <div class="auth-card__categories">${a.categories.map(c => {
-            const catSpent = txs.filter(t => t.authorizationId === a.id && t.category === c.label && t.status === 'approved').reduce((s, t) => s + t.amount, 0);
+          <div class="auth-card__header"><span class="auth-card__title"><span class="color-dot" style="background:${a.color};margin-right:6px;"></span>${formatCurrency(a.amountCap)} credit line &middot; ${escHtml(a.billTitle || '')}</span>
+          <span class="text-sm">${card ? '<span class="badge badge--green">Card active</span>' : '<span class="badge badge--amber">No card — cannot draw</span>'}${a.frozen ? ' <span class="badge badge--red">FROZEN</span>' : ''}</span></div>
+          <div class="progress mb-2"><div class="progress__fill" style="width:${drawnPct}%;background:${a.color}"></div></div>
+          <div class="text-xs text-muted mb-2">${formatCurrency(lineDrawn)} drawn &middot; ${formatCurrency(a.amountCap - lineDrawn)} undrawn credit</div>
+          <div class="auth-card__categories">${cats.map(c => {
+            const catSpent = txs.filter(t => t.type === 'spend' && t.creditLineId === a.id && t.category === c.label && t.status === 'approved').reduce((s, t) => s + t.amount, 0);
             return `<span class="badge badge--slate">${escHtml(c.label)}: ${formatCurrency(catSpent)}/${formatCurrency(c.quantitativeCap)}</span>`;
           }).join('')}</div>
         </div>`;
       }).join('')}
     </div></div>` : ''}
     <div class="card mb-4">
-      <div class="card__header"><h3>New Transaction</h3></div>
+      <div class="card__header"><h3>Congress's Treasury ATM — Draw eCoins (Coining)</h3></div>
       <div class="card__body">
         <div class="form-row">
-          <div class="form-group"><label class="form-label">Authorization</label>
-            <select class="form-select" id="tx-auth">${auths.length === 0 ? '<option>No authorizations</option>' : `<option value="">Select...</option>${auths.map(a => `<option value="${a.id}" ${fs.authId === a.id ? 'selected' : ''}>${formatCurrency(a.amountCap)} (${a.categories.map(c=>c.label).join(', ')})</option>`).join('')}`}</select>
+          <div class="form-group"><label class="form-label">Credit Line</label>
+            <select class="form-select" id="draw-line">${lines.length === 0 ? '<option>No credit lines</option>' : `<option value="">Select...</option>${lines.map(a => `<option value="${a.id}" ${fsD.lineId === a.id ? 'selected' : ''}>${formatCurrency(a.amountCap)} — ${escHtml(a.billTitle || a.id)}</option>`).join('')}`}</select>
           </div>
-          <div class="form-group"><label class="form-label">Category</label>
-            <select class="form-select" id="tx-category">${(() => {
-              const selA = auths.find(a => a.id === fs.authId);
-              if (!selA) return '<option value="">Select authorization first</option>';
-              return selA.categories.map(c => `<option value="${escHtml(c.label)}" ${fs.category === c.label ? 'selected' : ''}>${escHtml(c.label)}</option>`).join('');
-            })()}</select>
+          <div class="form-group"><label class="form-label">Amount ($)</label><input class="form-input" id="draw-amount" type="number" placeholder="e.g. 1000000000" value="${fsD.amount}"></div>
+        </div>
+        <div class="form-group"><label class="form-label">Memo</label><input class="form-input" id="draw-desc" placeholder="Purpose of this draw..." value="${escHtml(fsD.description)}"></div>
+        <button class="btn btn--success" data-action="submit-draw" data-agency-id="${agency.id}">Withdraw eCoins</button>
+      </div>
+    </div>
+    <div class="card mb-4">
+      <div class="card__header"><h3>Spend from ePurse (Spending)</h3></div>
+      <div class="card__body">
+        <div class="form-row">
+          <div class="form-group"><label class="form-label">Credit Line</label>
+            <select class="form-select" id="spend-line">${lines.length === 0 ? '<option>No credit lines</option>' : `<option value="">Select...</option>${lines.map(a => `<option value="${a.id}" ${fsS.lineId === a.id ? 'selected' : ''}>${formatCurrency(a.amountCap)} — ${escHtml(a.billTitle || a.id)}</option>`).join('')}`}</select>
+          </div>
+          <div class="form-group"><label class="form-label">Purpose (Card T&amp;C category)</label>
+            <select class="form-select" id="spend-category">${!spendLine ? '<option value="">Select credit line first</option>' : spendCats.map(c => `<option value="${escHtml(c.label)}" ${fsS.category === c.label ? 'selected' : ''}>${escHtml(c.label)}</option>`).join('')}</select>
           </div>
         </div>
         <div class="form-row">
-          <div class="form-group"><label class="form-label">Amount ($)</label><input class="form-input" id="tx-amount" type="number" placeholder="e.g. 50000000" value="${fs.amount}"></div>
-          <div class="form-group"><label class="form-label">Description</label><input class="form-input" id="tx-desc" placeholder="What is this spending for?" value="${escHtml(fs.description)}"></div>
+          <div class="form-group"><label class="form-label">Amount ($)</label><input class="form-input" id="spend-amount" type="number" placeholder="e.g. 50000000" value="${fsS.amount}"></div>
+          <div class="form-group"><label class="form-label">Description</label><input class="form-input" id="spend-desc" placeholder="What is this spending for?" value="${escHtml(fsS.description)}"></div>
         </div>
-        <button class="btn btn--primary" data-action="submit-transaction" data-agency-id="${agency.id}">Submit Transaction</button>
+        <button class="btn btn--primary" data-action="submit-spend" data-agency-id="${agency.id}">Submit Spending</button>
       </div>
     </div>
-    ${renderTransactionLog(txs, auths)}
+    ${renderTransactionLog(txs)}
   </div>`;
 }
 
-function renderTransactionLog(txs, auths) {
-  if (txs.length === 0) return '<div class="card"><div class="card__body text-sm text-muted">No transactions yet.</div></div>';
+function txTypeBadge(t) {
+  if (t === 'draw') return '<span class="badge badge--blue">ATM draw</span>';
+  if (t === 'spend') return '<span class="badge badge--purple">spend</span>';
+  if (t === 'collect') return '<span class="badge badge--slate">collection</span>';
+  return `<span class="badge badge--slate">${t}</span>`;
+}
+
+function renderTransactionLog(txs) {
+  if (txs.length === 0) return '<div class="card"><div class="card__body text-sm text-muted">No ledger entries yet.</div></div>';
   const sorted = [...txs].sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp));
   return `<div class="card card--flush">
-    <div class="card__header"><h3>Transaction Log</h3></div>
+    <div class="card__header"><h3>Ledger Node (Publishing)</h3><span class="text-sm text-muted">synced to the Public Statement and Account</span></div>
     <div class="table-wrap"><table>
-      <thead><tr><th>Timestamp</th><th>Category</th><th>Amount</th><th>Status</th><th>Description</th></tr></thead>
+      <thead><tr><th>Timestamp</th><th>Type</th><th>Category</th><th>Amount</th><th>Status</th><th>Description</th></tr></thead>
       <tbody>
         ${sorted.map(tx => {
           const statusBadge = tx.status === 'approved' ? 'badge--green' : tx.status === 'rejected' ? 'badge--red' : tx.status === 'flagged' ? 'badge--orange' : 'badge--amber';
           const isExpanded = formState.expandedTxId === tx.id;
           return `<tr style="cursor:pointer;" data-action="toggle-tx" data-tx-id="${tx.id}">
             <td class="text-sm">${formatDate(tx.timestamp)}</td>
-            <td><span class="badge badge--slate">${escHtml(tx.category)}</span></td>
+            <td>${txTypeBadge(tx.type)}</td>
+            <td>${tx.category ? `<span class="badge badge--slate">${escHtml(tx.category)}</span>` : '<span class="text-muted">—</span>'}</td>
             <td class="text-right"><strong>${formatCurrency(tx.amount)}</strong></td>
             <td><span class="badge ${statusBadge}">${tx.status}</span></td>
             <td class="text-sm">${escHtml(tx.description)}</td>
           </tr>
-          ${isExpanded && tx.complianceCheck ? `<tr class="expanded-row"><td colspan="5"><div class="compliance-detail">
+          ${isExpanded && tx.complianceCheck ? `<tr class="expanded-row"><td colspan="6"><div class="compliance-detail">
             <strong>Compliance: ${tx.complianceCheck.passed ? 'PASSED' : 'FAILED'}</strong>
             ${tx.complianceCheck.violations.length ? `<ul>${tx.complianceCheck.violations.map(v => `<li style="color:var(--red-600)">${escHtml(v)}</li>`).join('')}</ul>` : ''}
             <div class="text-xs text-muted mt-2">Checked: ${tx.complianceCheck.checkedAgainst.join(', ')}</div>
@@ -1257,6 +1419,87 @@ function renderTransactionLog(txs, auths) {
       </tbody>
     </table></div>
   </div>`;
+}
+
+/* ========== FISCAL RECORD VIEW (NDFR phase 5: Publishing) ========== */
+// Congress's "Public Statement and Account" super-node: government-wide
+// aggregates of funds appropriated, drawn, held, spent, and collected —
+// the constitutional Statement and Account (Art. I, § 9, cl. 7) rendered as
+// a live dashboard, plus the financing handbrake ("the parliamentary finger
+// on the button") that replaces the debt ceiling.
+function renderRecord(state) {
+  const agg = fiscAggregates(state);
+  const lines = enactedCreditLines(state);
+  const fsC = formState.collection;
+  const recent = [...state.transactions].sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp)).slice(0, 12);
+  const stats = [
+    { label: 'Appropriated (credit lines)', value: agg.appropriated, hint: 'spending power delegated on the Fiscal Record' },
+    { label: 'Drawn (eCoins created)', value: agg.drawn, hint: 'new digital dollars issued at the Treasury ATM' },
+    { label: 'Held on ePurses', value: agg.held, hint: 'drawn but not yet spent' },
+    { label: 'Spent into circulation', value: agg.spent, hint: 'eCoins paid out by agencies' },
+    { label: 'Collected (deleted)', value: agg.collected, hint: 'taxes & receipts redeem/delete eCoins' },
+    { label: 'Outstanding eCoins', value: agg.outstanding, hint: 'drawn minus collected — no bond issuance required' }
+  ];
+  return `<div class="content" style="height:calc(100vh - 56px);overflow-y:auto;"><div class="content-inner">
+    <h2 style="font-size:18px;font-weight:700;margin-bottom:4px;">Congressional Fiscal Record — Public Statement and Account</h2>
+    <p class="text-sm text-muted mb-4">Agency ledger nodes sync automatically to this congressionally managed super-node. Deficits are money-financed by design: draws create eCoins, collections delete them, and no Treasury debt issuance intermediates spending.</p>
+    <div class="stat-grid mb-4">
+      ${stats.map(s => `<div class="card" style="margin-bottom:0;"><div class="text-xs text-muted">${s.label}</div><div style="font-size:20px;font-weight:700;margin:4px 0;">${formatCurrency(s.value)}</div><div class="text-xs text-muted">${s.hint}</div></div>`).join('')}
+    </div>
+    <div class="card card--flush mb-4">
+      <div class="card__header"><h3>Credit Lines &amp; Financing Handbrake</h3><span class="text-sm text-muted">freeze = Joint Resolution suspending new draws</span></div>
+      <div class="table-wrap"><table>
+        <thead><tr><th>Agency</th><th>Bill</th><th>Cap</th><th>Drawn</th><th>Card</th><th>Status</th><th></th></tr></thead>
+        <tbody>
+        ${lines.length === 0 ? '<tr><td colspan="7" class="text-sm text-muted">No enacted credit lines yet.</td></tr>' : lines.map(l => {
+          const ag = state.agencies.find(a => a.id === l.agencyId);
+          const card = cardForLine(state, l.id);
+          const drawn = drawnOnLine(l.id, state.transactions);
+          return `<tr>
+            <td><span class="color-dot" style="background:${l.color};margin-right:6px;"></span>${ag ? ag.abbreviation : l.agencyId}</td>
+            <td class="text-sm">${escHtml(l.billTitle || '')}</td>
+            <td class="text-right">${formatCurrency(l.amountCap)}</td>
+            <td class="text-right">${formatCurrency(drawn)}</td>
+            <td>${card ? '<span class="badge badge--green">active</span>' : '<span class="badge badge--amber">none</span>'}</td>
+            <td>${l.frozen ? '<span class="badge badge--red">FROZEN</span>' : '<span class="badge badge--green">open</span>'}</td>
+            <td>${l.frozen ? `<button class="btn btn--outline btn--xs" data-action="unfreeze-line" data-line-id="${l.id}">Lift freeze (JRes)</button>` : `<button class="btn btn--danger btn--xs" data-action="freeze-line" data-line-id="${l.id}">Freeze (JRes)</button>`}</td>
+          </tr>`;
+        }).join('')}
+        </tbody>
+      </table></div>
+    </div>
+    <div class="card mb-4">
+      <div class="card__header"><h3>Record Collections (taxes &amp; receipts)</h3></div>
+      <div class="card__body">
+        <p class="text-xs text-muted mb-2">Under the NDFR, taxes do not "fund" spending: dollars redeemed through taxes and other public dues are <em>deleted</em>, shrinking outstanding eCoins.</p>
+        <div class="form-row">
+          <div class="form-group"><label class="form-label">Amount ($)</label><input class="form-input" id="collect-amount" type="number" placeholder="e.g. 300000000" value="${fsC.amount}"></div>
+          <div class="form-group"><label class="form-label">Description</label><input class="form-input" id="collect-desc" placeholder="e.g. Q3 corporate income tax receipts" value="${escHtml(fsC.description)}"></div>
+        </div>
+        <button class="btn btn--outline" data-action="submit-collection">Record Collection</button>
+      </div>
+    </div>
+    <div class="card card--flush">
+      <div class="card__header"><h3>Recent Ledger Activity (all nodes)</h3></div>
+      <div class="table-wrap"><table>
+        <thead><tr><th>Timestamp</th><th>Node</th><th>Type</th><th>Amount</th><th>Status</th><th>Description</th></tr></thead>
+        <tbody>
+        ${recent.length === 0 ? '<tr><td colspan="6" class="text-sm text-muted">No activity yet.</td></tr>' : recent.map(tx => {
+          const ag = state.agencies.find(a => a.id === tx.agencyId);
+          const statusBadge = tx.status === 'approved' ? 'badge--green' : 'badge--red';
+          return `<tr>
+            <td class="text-sm">${formatDate(tx.timestamp)}</td>
+            <td class="text-sm">${ag ? ag.abbreviation : 'Fiscal Record'}</td>
+            <td>${txTypeBadge(tx.type)}</td>
+            <td class="text-right"><strong>${formatCurrency(tx.amount)}</strong></td>
+            <td><span class="badge ${statusBadge}">${tx.status}</span></td>
+            <td class="text-sm">${escHtml(tx.description)}</td>
+          </tr>`;
+        }).join('')}
+        </tbody>
+      </table></div>
+    </div>
+  </div></div>`;
 }
 
 /* ========== EVENT HANDLING ========== */
@@ -1270,29 +1513,34 @@ function mountHandlers(state) {
   // Capture changes for form inputs
   document.getElementById('app').onchange = function(e) {
     const t = e.target;
-    if (t.id === 'tx-auth') { formState.transaction.authId = t.value; formState.transaction.category = ''; render(); }
-    if (t.id === 'tx-category') formState.transaction.category = t.value;
-    if (t.id === 'new-auth-agency') formState.newAuth.agencyId = t.value;
+    if (t.id === 'draw-line') formState.draw.lineId = t.value;
+    if (t.id === 'spend-line') { formState.spend.lineId = t.value; formState.spend.category = ''; render(); }
+    if (t.id === 'spend-category') formState.spend.category = t.value;
+    if (t.id === 'new-line-agency') formState.newLine.agencyId = t.value;
   };
   document.getElementById('app').oninput = function(e) {
     const t = e.target;
     if (t.id === 'new-bill-title') formState.newBill.title = t.value;
     if (t.id === 'new-bill-sponsor') formState.newBill.sponsor = t.value;
-    if (t.id === 'new-auth-amount') formState.newAuth.amountCap = t.value;
-    if (t.id === 'new-auth-time') formState.newAuth.timeLimit = t.value;
-    if (t.id === 'new-auth-restrictions') formState.newAuth.restrictions = t.value;
+    if (t.id === 'new-line-amount') formState.newLine.amountCap = t.value;
+    if (t.id === 'new-line-time') formState.newLine.timeLimit = t.value;
+    if (t.id === 'new-line-restrictions') formState.newLine.restrictions = t.value;
     if (t.id === 'amend-author') formState.newAmendment.author = t.value;
     if (t.id === 'amend-desc') formState.newAmendment.description = t.value;
     if (t.id === 'amend-old') formState.newAmendment.oldText = t.value;
     if (t.id === 'amend-new') formState.newAmendment.newText = t.value;
     if (t.id === 'amend-line') formState.newAmendment.lineNumber = parseInt(t.value) || 0;
-    if (t.id === 'tx-amount') formState.transaction.amount = t.value;
-    if (t.id === 'tx-desc') formState.transaction.description = t.value;
-    if (t.id === 'ref-committee') formState.refinement.committeeName = t.value;
-    if (t.id === 'ref-req-sigs') formState.refinement.requiredSigs = parseInt(t.value) || 1;
-    if (t.classList.contains('subcat-label')) { formState.refinement.subcategories[t.dataset.idx].label = t.value; }
-    if (t.classList.contains('subcat-cap')) { formState.refinement.subcategories[t.dataset.idx].quantitativeCap = parseFloat(t.value) || 0; }
-    if (t.classList.contains('subcat-rules')) { formState.refinement.subcategories[t.dataset.idx].qualitativeRules = t.value.split('\n').filter(Boolean); }
+    if (t.id === 'draw-amount') formState.draw.amount = t.value;
+    if (t.id === 'draw-desc') formState.draw.description = t.value;
+    if (t.id === 'spend-amount') formState.spend.amount = t.value;
+    if (t.id === 'spend-desc') formState.spend.description = t.value;
+    if (t.id === 'collect-amount') formState.collection.amount = t.value;
+    if (t.id === 'collect-desc') formState.collection.description = t.value;
+    if (t.id === 'card-committee') formState.card.committeeName = t.value;
+    if (t.id === 'card-req-sigs') formState.card.requiredSigs = parseInt(t.value) || 1;
+    if (t.classList.contains('subcat-label')) { formState.card.subcategories[t.dataset.idx].label = t.value; }
+    if (t.classList.contains('subcat-cap')) { formState.card.subcategories[t.dataset.idx].quantitativeCap = parseFloat(t.value) || 0; }
+    if (t.classList.contains('subcat-rules')) { formState.card.subcategories[t.dataset.idx].qualitativeRules = t.value.split('\n').filter(Boolean); }
   };
 }
 
@@ -1316,7 +1564,7 @@ function handleAction(action, data, state) {
       const bill = {
         id: 'bill-' + uid(), title: formState.newBill.title.trim(), status: 'draft',
         sponsor: formState.newBill.sponsor.trim() || 'Unknown', introducedDate: new Date().toISOString().slice(0, 10),
-        text: '', authorizations: [], amendments: [],
+        text: '', creditLines: [], amendments: [],
         votes: { billId: '', houseVotes: [], senateVotes: [], houseCount: {yea:0,nay:0,present:0,absent:0}, senateCount: {yea:0,nay:0,present:0,absent:0}, presidentialAction: null, vetoOverrideHouse: null, vetoOverrideSenate: null }
       };
       bill.votes.billId = bill.id;
@@ -1328,24 +1576,24 @@ function handleAction(action, data, state) {
       formState.activeTab = data.tab;
       render();
       break;
-    case 'toggle-new-auth':
-      formState.newAuth.visible = !formState.newAuth.visible;
+    case 'toggle-new-line':
+      formState.newLine.visible = !formState.newLine.visible;
       render();
       break;
-    case 'set-auth-color':
-      formState.newAuth.color = data.color;
+    case 'set-line-color':
+      formState.newLine.color = data.color;
       render();
       break;
-    case 'create-auth': {
-      if (!formState.newAuth.agencyId || !formState.newAuth.amountCap) return;
-      const auth = {
-        id: 'auth-' + uid(), billId: state.selectedBillId, agencyId: formState.newAuth.agencyId,
-        type: 'both', amountCap: parseFloat(formState.newAuth.amountCap), timeLimit: formState.newAuth.timeLimit || null,
-        restrictions: formState.newAuth.restrictions.split('\n').filter(Boolean),
-        categories: [], color: formState.newAuth.color
+    case 'create-line': {
+      if (!formState.newLine.agencyId || !formState.newLine.amountCap) return;
+      const line = {
+        id: 'auth-' + uid(), billId: state.selectedBillId, agencyId: formState.newLine.agencyId,
+        frozen: false, amountCap: parseFloat(formState.newLine.amountCap), timeLimit: formState.newLine.timeLimit || null,
+        restrictions: formState.newLine.restrictions.split('\n').filter(Boolean),
+        categories: [], color: formState.newLine.color
       };
-      formState.newAuth = { agencyId: '', amountCap: '', timeLimit: '', restrictions: '', type: 'both', color: '#2563eb', visible: false };
-      Store.dispatch({ type: 'ADD_AUTHORIZATION', payload: { billId: state.selectedBillId, authorization: auth } });
+      formState.newLine = { agencyId: '', amountCap: '', timeLimit: '', restrictions: '', color: '#2563eb', visible: false };
+      Store.dispatch({ type: 'ADD_CREDIT_LINE', payload: { billId: state.selectedBillId, creditLine: line } });
       break;
     }
     case 'toggle-new-amendment':
@@ -1389,74 +1637,110 @@ function handleAction(action, data, state) {
       Store.dispatch({ type: 'UPDATE_VOTES', payload: { billId: data.billId, votes: { presidentialAction: 'vetoed' } } });
       Store.dispatch({ type: 'UPDATE_BILL_STATUS', payload: { billId: data.billId, status: 'vetoed' } });
       break;
-    case 'select-auth-refinement':
-      formState.selectedAuthForRefinement = data.authId;
-      formState.refinement = { subcategories: [], committeeName: '', requiredSigs: 1, signatories: [], complianceResult: null, visible: false };
-      render();
+    case 'select-line-card':
+      formState.card = { subcategories: [], committeeName: '', requiredSigs: 1, signatories: [], complianceResult: null, visible: false };
+      Store.dispatch({ type: 'SELECT_LINE', payload: data.lineId });
       break;
     case 'add-subcategory':
-      formState.refinement.subcategories.push({ id: 'sc-' + uid(), label: '', parentCategory: null, quantitativeCap: 0, qualitativeRules: [] });
+      formState.card.subcategories.push({ id: 'sc-' + uid(), label: '', parentCategory: null, quantitativeCap: 0, qualitativeRules: [] });
       render();
       break;
     case 'remove-subcategory':
-      formState.refinement.subcategories.splice(parseInt(data.idx), 1);
+      formState.card.subcategories.splice(parseInt(data.idx), 1);
       render();
       break;
     case 'add-signatory': {
-      const sigInput = document.getElementById('ref-new-sig');
+      const sigInput = document.getElementById('card-new-sig');
       if (sigInput && sigInput.value.trim()) {
-        formState.refinement.signatories.push(sigInput.value.trim());
+        formState.card.signatories.push(sigInput.value.trim());
         render();
       }
       break;
     }
     case 'remove-signatory':
-      formState.refinement.signatories.splice(parseInt(data.idx), 1);
+      formState.card.signatories.splice(parseInt(data.idx), 1);
       render();
       break;
     case 'run-compliance': {
       const st = Store.getState();
-      let auth = null;
-      for (const b of st.bills) { auth = b.authorizations.find(a => a.id === data.authId); if (auth) break; }
-      if (auth) {
-        formState.refinement.complianceResult = checkRefinementCompliance(formState.refinement.subcategories, auth);
+      const line = findCreditLine(st, data.lineId);
+      if (line) {
+        formState.card.complianceResult = checkCardTermsCompliance(formState.card.subcategories, line);
       }
       render();
       break;
     }
-    case 'submit-refinement': {
-      const ref = {
-        id: 'ref-' + uid(), authorizationId: data.authId, committeeId: 'committee-' + uid(),
-        committeeName: formState.refinement.committeeName || 'Unnamed Committee',
-        subcategories: JSON.parse(JSON.stringify(formState.refinement.subcategories)),
-        signatories: [...formState.refinement.signatories],
-        requiredSignatures: formState.refinement.requiredSigs,
-        status: 'approved'
+    case 'issue-card': {
+      const card = {
+        id: 'card-' + uid(), creditLineId: data.lineId, agencyId: (findCreditLine(Store.getState(), data.lineId) || {}).agencyId,
+        committeeName: formState.card.committeeName || 'Unnamed Issuing Body',
+        termsAndConditions: JSON.parse(JSON.stringify(formState.card.subcategories)),
+        signatories: [...formState.card.signatories],
+        requiredSignatures: formState.card.requiredSigs,
+        issuedDate: new Date().toISOString(),
+        status: 'active'
       };
-      formState.refinement = { subcategories: [], committeeName: '', requiredSigs: 1, signatories: [], complianceResult: null, visible: false };
-      Store.dispatch({ type: 'ADD_REFINEMENT', payload: ref });
+      formState.card = { subcategories: [], committeeName: '', requiredSigs: 1, signatories: [], complianceResult: null, visible: false };
+      Store.dispatch({ type: 'ISSUE_CARD', payload: card });
       break;
     }
-    case 'submit-transaction': {
+    case 'submit-draw': {
       const st = Store.getState();
-      const agency = st.agencies.find(a => a.id === data.agencyId);
-      if (!agency) return;
-      const authId = formState.transaction.authId;
-      const auth = agency.authorizations.find(a => a.id === authId);
-      if (!auth || !formState.transaction.amount || !formState.transaction.category) return;
+      const lineId = formState.draw.lineId;
+      const line = findCreditLine(st, lineId);
+      if (!line || !formState.draw.amount) return;
       const tx = {
-        id: 'tx-' + uid(), agencyId: agency.id, authorizationId: authId,
-        amount: parseFloat(formState.transaction.amount), category: formState.transaction.category,
-        description: formState.transaction.description || '', timestamp: new Date().toISOString(),
+        id: 'tx-' + uid(), type: 'draw', agencyId: data.agencyId, creditLineId: lineId,
+        amount: parseFloat(formState.draw.amount), category: null,
+        description: formState.draw.description || 'eCoin draw at the Treasury ATM', timestamp: new Date().toISOString(),
         status: 'pending', complianceCheck: { passed: true, violations: [], checkedAgainst: [] }
       };
-      const compliance = checkTransactionCompliance(tx, auth, agency, st.transactions);
+      const card = cardForLine(st, lineId);
+      const compliance = checkDrawCompliance(tx, line, card, st.transactions);
       tx.complianceCheck = compliance;
       tx.status = compliance.passed ? 'approved' : 'rejected';
-      formState.transaction = { authId: '', category: '', amount: '', description: '' };
+      formState.draw = { lineId: '', amount: '', description: '' };
       Store.dispatch({ type: 'ADD_TRANSACTION', payload: tx });
       break;
     }
+    case 'submit-spend': {
+      const st = Store.getState();
+      const lineId = formState.spend.lineId;
+      const line = findCreditLine(st, lineId);
+      if (!line || !formState.spend.amount || !formState.spend.category) return;
+      const tx = {
+        id: 'tx-' + uid(), type: 'spend', agencyId: data.agencyId, creditLineId: lineId,
+        amount: parseFloat(formState.spend.amount), category: formState.spend.category,
+        description: formState.spend.description || '', timestamp: new Date().toISOString(),
+        status: 'pending', complianceCheck: { passed: true, violations: [], checkedAgainst: [] }
+      };
+      const card = cardForLine(st, lineId);
+      const compliance = checkSpendCompliance(tx, line, card, data.agencyId, st.transactions);
+      tx.complianceCheck = compliance;
+      tx.status = compliance.passed ? 'approved' : 'rejected';
+      formState.spend = { lineId: '', category: '', amount: '', description: '' };
+      Store.dispatch({ type: 'ADD_TRANSACTION', payload: tx });
+      break;
+    }
+    case 'submit-collection': {
+      if (!formState.collection.amount) return;
+      const tx = {
+        id: 'tx-' + uid(), type: 'collect', agencyId: null, creditLineId: null,
+        amount: parseFloat(formState.collection.amount), category: null,
+        description: formState.collection.description || 'Tax & receipt collections (eCoins deleted)',
+        timestamp: new Date().toISOString(), status: 'approved',
+        complianceCheck: { passed: true, violations: [], checkedAgainst: ['Collections are recorded and deleted from outstanding eCoins'] }
+      };
+      formState.collection = { amount: '', description: '' };
+      Store.dispatch({ type: 'ADD_TRANSACTION', payload: tx });
+      break;
+    }
+    case 'freeze-line':
+      Store.dispatch({ type: 'SET_LINE_FROZEN', payload: { lineId: data.lineId, frozen: true } });
+      break;
+    case 'unfreeze-line':
+      Store.dispatch({ type: 'SET_LINE_FROZEN', payload: { lineId: data.lineId, frozen: false } });
+      break;
     case 'toggle-tx':
       formState.expandedTxId = formState.expandedTxId === data.txId ? null : data.txId;
       render();
@@ -1483,10 +1767,10 @@ function handleAction(action, data, state) {
     }
     case 'reset-demo':
       if (confirm('Reset all data to defaults? This cannot be undone.')) {
-        localStorage.removeItem('fiscal-ledger-state');
+        localStorage.removeItem('fiscal-ledger-state-v2');
         formState.activeTab = 'authorizations';
-        formState.selectedAuthForRefinement = null;
         formState.expandedTxId = null;
+        formState.card = { subcategories: [], committeeName: '', requiredSigs: 1, signatories: [], complianceResult: null, visible: false };
         Store._state = getInitialState();
         Store._notify();
       }
@@ -1571,49 +1855,50 @@ async function startGuidedDemo() {
   _demoAborted = false;
 
   // Reset to clean state
-  localStorage.removeItem('fiscal-ledger-state');
+  localStorage.removeItem('fiscal-ledger-state-v2');
   formState.activeTab = 'authorizations';
-  formState.selectedAuthForRefinement = null;
   formState.expandedTxId = null;
   formState.newBill = { title: '', sponsor: '', visible: false };
-  formState.newAuth = { agencyId: '', amountCap: '', timeLimit: '', restrictions: '', type: 'both', color: '#2563eb', visible: false };
+  formState.newLine = { agencyId: '', amountCap: '', timeLimit: '', restrictions: '', color: '#2563eb', visible: false };
   formState.newAmendment = { author: '', description: '', oldText: '', newText: '', lineNumber: 0, visible: false };
-  formState.transaction = { authId: '', category: '', amount: '', description: '' };
-  formState.refinement = { subcategories: [], committeeName: '', requiredSigs: 1, signatories: [], complianceResult: null, visible: false };
+  formState.draw = { lineId: '', amount: '', description: '' };
+  formState.spend = { lineId: '', category: '', amount: '', description: '' };
+  formState.collection = { amount: '', description: '' };
+  formState.card = { subcategories: [], committeeName: '', requiredSigs: 1, signatories: [], complianceResult: null, visible: false };
   Store._state = getInitialState();
   Store._notify();
   document.body.classList.add('demo-active');
 
-  const T = 34; // total steps
+  const T = 36; // total steps
   const billId = 'bill-001';
 
   // Helper to bail early
   function ab() { return _demoAborted; }
 
-  // ===== PHASE 1: LEGISLATIVE =====
-  await demoWaitForClick('Legislative', 1, T,
-    'Welcome to the <strong>Congressional Fiscal Ledger</strong> demo. This guided tour walks through the full lifecycle: from drafting legislation, to committee refinement, to agency spending. Click <strong>Next</strong> to begin.');
+  // ===== PHASE 1: APPROPRIATING =====
+  await demoWaitForClick('NDFR', 1, T,
+    'Welcome to the <strong>Congressional Fiscal Ledger</strong> — a toy model of the <strong>New Digital Fiscal Regime</strong> from Rohan Grey\'s <em>Digitizing the Fisc</em>. We\'ll walk its five phases: <strong>Appropriating &rarr; Drawing &rarr; Coining &rarr; Spending &rarr; Publishing</strong>. Click <strong>Next</strong> to begin.');
   if (ab()) return;
 
   // Step 2: Select bill
   Store.dispatch({ type: 'SET_VIEW', payload: 'legislative' });
   Store.dispatch({ type: 'SELECT_BILL', payload: billId });
-  await demoWaitForClick('Legislative', 2, T,
-    'We start in the <strong>Legislative Dashboard</strong>. Two sample bills are pre-loaded. We\'ve selected the <strong>Congressional Infrastructure & Innovation Act</strong> — a $10B bill funding DOT, DOE, and NSF.');
+  await demoWaitForClick('Appropriating', 2, T,
+    'We start with the <strong>Congressional Infrastructure &amp; Innovation Act</strong>. Note the operative words: it <strong>appropriates</strong> Public Credit lines onto the Congressional Fiscal Record. A bill that merely said "there is <em>authorized to be appropriated</em>" would confer <strong>no spending power at all</strong> — authorizations and appropriations are different legal acts.');
   if (ab()) return;
 
-  // Step 3: Show authorizations
+  // Step 3: Show credit lines
   formState.activeTab = 'authorizations';
   render();
-  await demoWaitForClick('Authorizations', 3, T,
-    'The <strong>Authorizations tab</strong> shows three color-coded spending authorizations: <strong>$5B to DOT</strong> (blue), <strong>$3B to DOE</strong> (green), and <strong>$2B to NSF</strong> (orange). Each has specific categories, caps, and qualitative restrictions.');
+  await demoWaitForClick('Credit Lines', 3, T,
+    'The <strong>Public Credit Lines tab</strong> shows three color-coded appropriations: <strong>$5B for DOT</strong> (blue), <strong>$3B for DOE</strong> (green), and <strong>$2B for NSF</strong> (orange). Each is a delegation of spending <em>power</em> — a numbered credit line with categories, caps, restrictions, and a period of availability. No dollars exist yet.');
   if (ab()) return;
 
   // Step 4: Propose an amendment
   formState.activeTab = 'amendments';
   render();
   await demoWaitForClick('Amendments', 4, T,
-    'Switching to the <strong>Amendments tab</strong>. Legislators can propose wiki-style amendments that show a diff of the original vs. proposed text. Let\'s add one now.');
+    'The Fiscal Record treats legislation as <strong>natively digital text with version control</strong>. Legislators propose amendments as diffs against the bill. Let\'s add one.');
   if (ab()) return;
 
   // Step 5: Create amendment
@@ -1621,30 +1906,30 @@ async function startGuidedDemo() {
   Store.dispatch({ type: 'ADD_AMENDMENT', payload: { billId, amendment: {
     id: amendId, billId, author: 'Rep. Rashida Tlaib [D-MI]', timestamp: new Date().toISOString(),
     description: 'Increase rural connectivity allocation from $500M to $750M to address broadband gaps in underserved areas',
-    changes: [{ lineNumber: 13, oldText: '  (4) Rural connectivity: up to $500,000,000', newText: '  (4) Rural connectivity: up to $750,000,000' }],
+    changes: [{ lineNumber: 20, oldText: '  (4) Rural connectivity: up to $500,000,000', newText: '  (4) Rural connectivity: up to $750,000,000' }],
     status: 'proposed'
   }}});
   render();
   await demoWaitForClick('Amendments', 5, T,
-    'Rep. Tlaib proposed an amendment to <strong>increase rural connectivity funding from $500M to $750M</strong>. The diff view shows the exact text change. Amendments can be adopted or rejected.');
+    'Rep. Tlaib proposed an amendment to <strong>increase rural connectivity funding from $500M to $750M</strong>. The diff view shows the exact text change.');
   if (ab()) return;
 
   // Step 6: Adopt the amendment
   Store.dispatch({ type: 'UPDATE_AMENDMENT_STATUS', payload: { billId, amendmentId: amendId, status: 'adopted' } });
   render();
   await demoWaitForClick('Amendments', 6, T,
-    'The amendment was <strong>adopted</strong>. The bill text is now updated with the new rural connectivity figure. In a real system, this creates an auditable revision history.');
+    'The amendment was <strong>adopted</strong> and the bill text updated — an auditable revision history on the Record itself, in contrast to today\'s U.S. Code, which doesn\'t even include appropriations acts.');
   if (ab()) return;
 
   // Step 7: Move to vote tab
   formState.activeTab = 'vote';
   render();
   await demoWaitForClick('Voting', 7, T,
-    'Now we move to the <strong>Vote tab</strong>. The pipeline stepper shows the bill\'s journey: House Vote &rarr; Senate Vote &rarr; Presidential Action &rarr; Enacted. Let\'s simulate the <strong>House vote</strong>.');
+    'On to the <strong>Vote tab</strong>. Passage requires a <strong>majority of Members present and voting</strong> in each chamber (218/51 only if every seat votes). Under the NDFR these floor votes are literally <strong>Budget Key signatures</strong> editing the Fiscal Record. Let\'s simulate the House.');
   if (ab()) return;
 
   // Step 8: Simulate House vote
-  updateDemoBar('House Vote', 8, T, 'Simulating <strong>House of Representatives vote</strong>... Watch the tally bar fill in real time. 218 yea votes needed to pass.', true);
+  updateDemoBar('House Vote', 8, T, 'Simulating <strong>House of Representatives vote</strong>... Watch the tally bar fill in real time. A majority of those voting is needed.', true);
   Store.dispatch({ type: 'UPDATE_BILL_STATUS', payload: { billId, status: 'house_voting' } });
   await demoWait(100);
   startVoteAnimation('house', billId, false);
@@ -1655,11 +1940,11 @@ async function startGuidedDemo() {
 
   const houseResult = Store.getState().bills.find(b => b.id === billId).votes.houseCount;
   await demoWaitForClick('House Vote', 9, T,
-    `The House voted <strong>${houseResult.yea} yea to ${houseResult.nay} nay</strong>. The bill <strong>passed the House</strong>! Each of the 435 member votes was animated individually. Now on to the Senate.`);
+    `The House voted <strong>${houseResult.yea} yea to ${houseResult.nay} nay</strong> — a majority of the ${houseResult.yea + houseResult.nay} Members voting. The bill <strong>passed the House</strong>. Now the Senate.`);
   if (ab()) return;
 
   // Step 10: Simulate Senate vote
-  updateDemoBar('Senate Vote', 10, T, 'Simulating <strong>United States Senate vote</strong>... 51 yea votes needed.', true);
+  updateDemoBar('Senate Vote', 10, T, 'Simulating <strong>United States Senate vote</strong>... majority of those voting needed (the VP breaks ties).', true);
   Store.dispatch({ type: 'UPDATE_BILL_STATUS', payload: { billId, status: 'senate_voting' } });
   await demoWait(100);
   startVoteAnimation('senate', billId, false);
@@ -1670,14 +1955,14 @@ async function startGuidedDemo() {
 
   const senateResult = Store.getState().bills.find(b => b.id === billId).votes.senateCount;
   await demoWaitForClick('Senate Vote', 11, T,
-    `The Senate voted <strong>${senateResult.yea} yea to ${senateResult.nay} nay</strong>. <strong>Passed the Senate!</strong> The bill now goes to the President.`);
+    `The Senate voted <strong>${senateResult.yea} yea to ${senateResult.nay} nay</strong>. <strong>Passed!</strong> (In today\'s Senate most bills first need 60 votes for cloture; the NDFR treats budgetary law as the majority-vote <em>default</em>, flipping the filibuster/Byrd-rule presumption.)`);
   if (ab()) return;
 
   // Step 12: Presidential VETO (longest path)
   Store.dispatch({ type: 'UPDATE_BILL_STATUS', payload: { billId, status: 'presidential_review' } });
   render();
   await demoWaitForClick('Presidential', 12, T,
-    'The bill is now under <strong>Presidential Review</strong>. The President can sign or veto. To demonstrate the full veto override flow — the <strong>longest possible path</strong> — the President will <strong>veto</strong> this bill.');
+    'Now <strong>Presidential Review</strong>. The NDFR\'s two-tier edit rule mirrors Art. I, &sect; 7: a Fiscal Record edit takes effect with <strong>bare majorities plus the President\'s signature</strong> (or his 10-day silence), or with <strong>two-thirds of both houses</strong> over his veto. To show the longest path, the President will <strong>veto</strong>.');
   if (ab()) return;
 
   // Step 13: Execute veto
@@ -1685,11 +1970,11 @@ async function startGuidedDemo() {
   Store.dispatch({ type: 'UPDATE_BILL_STATUS', payload: { billId, status: 'vetoed' } });
   render();
   await demoWaitForClick('Veto', 13, T,
-    '<strong>The President has vetoed the bill.</strong> But Congress can override with a 2/3 supermajority in both chambers. This is the constitutional check on executive power — exactly what this ledger is designed to demonstrate.');
+    '<strong>The President has vetoed the bill.</strong> Congress can override with <strong>two-thirds of Members present and voting</strong> in each chamber — the constitutional supermajority that lets the legislature act unilaterally.');
   if (ab()) return;
 
   // Step 14: House override vote
-  updateDemoBar('Override (House)', 14, T, 'Simulating <strong>House veto override vote</strong>... 2/3 of members present needed.', true);
+  updateDemoBar('Override (House)', 14, T, 'Simulating <strong>House veto override vote</strong>... 2/3 of Members present and voting needed.', true);
   Store.dispatch({ type: 'UPDATE_BILL_STATUS', payload: { billId, status: 'veto_override_house' } });
   await demoWait(100);
   startVoteAnimation('house', billId, true);
@@ -1700,11 +1985,11 @@ async function startGuidedDemo() {
 
   const hOverride = Store.getState().bills.find(b => b.id === billId).votes.vetoOverrideHouse;
   await demoWaitForClick('Override (House)', 15, T,
-    `House override vote: <strong>${hOverride.yea} yea to ${hOverride.nay} nay</strong>. The House override <strong>${hOverride.yea >= Math.ceil((hOverride.yea + hOverride.nay + hOverride.present) * 2/3) ? 'succeeded' : 'failed'}</strong>! Now the Senate must also override.`);
+    `House override vote: <strong>${hOverride.yea} yea to ${hOverride.nay} nay</strong> — ${overrideThreshold(hOverride)} of the ${hOverride.yea + hOverride.nay} voting were needed, so the House override <strong>${overridePassed(hOverride) ? 'succeeded' : 'failed'}</strong>. Now the Senate.`);
   if (ab()) return;
 
   // Step 16: Senate override vote
-  updateDemoBar('Override (Senate)', 16, T, 'Simulating <strong>Senate veto override vote</strong>... 2/3 of members present needed.', true);
+  updateDemoBar('Override (Senate)', 16, T, 'Simulating <strong>Senate veto override vote</strong>... 2/3 of Members present and voting needed.', true);
   Store.dispatch({ type: 'UPDATE_BILL_STATUS', payload: { billId, status: 'veto_override_senate' } });
   await demoWait(100);
   startVoteAnimation('senate', billId, true);
@@ -1716,40 +2001,41 @@ async function startGuidedDemo() {
   const bill1State = Store.getState().bills.find(b => b.id === billId);
   const overridden = isVetoOverridden(bill1State.votes);
   if (overridden) {
+    Store.dispatch({ type: 'ENACT_BILL', payload: { billId } });
+    render();
     await demoWaitForClick('Enacted', 17, T,
-      '<strong>Veto overridden! The bill is enacted.</strong> Both chambers achieved the 2/3 supermajority. The 536-key authority model (535 Congress + President) has spoken. Authorizations are now live and agencies are funded.');
+      '<strong>Veto overridden — the bill is enacted.</strong> Its Public Credit lines are now live entries on the Congressional Fiscal Record. Crucially, <strong>no money has moved</strong>: enactment delegates spending <em>power</em>. Dollars only come into existence in phase 3, at the ATM.');
   } else {
-    // Override failed — sign the bill via alternate path so the demo can continue
+    // Override failed — enact via alternate path so the demo can continue
     await demoWaitForClick('Override Failed', 17, T,
-      'The veto override didn\'t achieve 2/3 in both chambers. For demo purposes, we\'ll <strong>enact the bill directly</strong> so we can continue to the committee and spending phases.');
+      'The override didn\'t reach 2/3 of those voting in both chambers. For demo purposes we\'ll <strong>enact the bill directly</strong> so we can continue. (Remember: enactment records credit lines — it moves no money.)');
     Store.dispatch({ type: 'ENACT_BILL', payload: { billId } });
     render();
   }
   if (ab()) return;
 
-  // ===== PHASE 2: COMMITTEE REFINEMENT =====
-  Store.dispatch({ type: 'SET_VIEW', payload: 'committee' });
+  // ===== PHASE 2: DRAWING (Public Credit Card issuance) =====
+  Store.dispatch({ type: 'SET_VIEW', payload: 'cards' });
   render();
-  await demoWaitForClick('Committee', 18, T,
-    'We\'ve moved to <strong>Phase 2: Committee Refinement</strong>. After enactment, broad authorizations need to be broken into specific spending subcategories by congressional committees. This is the intra-legislative phase.');
+  await demoWaitForClick('Drawing', 18, T,
+    '<strong>Phase 2: Drawing.</strong> DOT still can\'t touch the ATM — it must first obtain a <strong>Public Credit Card</strong> (its "Purse Key"). Congress\'s committees and legislative-branch organs (GAO, CBO, Library of Congress) negotiate the Card\'s Terms &amp; Conditions with the agency under the <strong>ATM Access Protocol</strong>. This is Congress reabsorbing the role OMB apportionment plays today.');
   if (ab()) return;
 
-  // Step 19: Select an authorization to refine
+  // Step 19: Select the DOT credit line
   const enactedBill = Store.getState().bills.find(b => b.id === billId);
-  const authToRefine = enactedBill ? enactedBill.authorizations[0] : null;
-  if (authToRefine) {
-    formState.selectedAuthForRefinement = authToRefine.id;
-    formState.refinement = { subcategories: [], committeeName: '', requiredSigs: 2, signatories: [], complianceResult: null, visible: false };
-    render();
+  const lineToCard = enactedBill ? enactedBill.creditLines[0] : null;
+  if (lineToCard) {
+    formState.card = { subcategories: [], committeeName: '', requiredSigs: 2, signatories: [], complianceResult: null, visible: false };
+    Store.dispatch({ type: 'SELECT_LINE', payload: lineToCard.id });
   }
-  await demoWaitForClick('Committee', 19, T,
-    'We\'ve selected the <strong>DOT $5B authorization</strong> for refinement. The right panel shows the original authorization details — cap, expiration, categories, and restrictions. Now let\'s break it into specific subcategories.');
+  await demoWaitForClick('Drawing', 19, T,
+    'We\'ve selected the <strong>DOT $5B credit line</strong>. The panel shows the statutory terms from the Fiscal Record — cap, period of availability, categories, restrictions. Now Congress compiles these into executable Card Terms &amp; Conditions.');
   if (ab()) return;
 
-  // Step 20: Add subcategories
-  formState.refinement.committeeName = 'Senate Appropriations Committee';
-  formState.refinement.requiredSigs = 2;
-  formState.refinement.subcategories = [
+  // Step 20: Negotiate Terms & Conditions
+  formState.card.committeeName = 'Joint Committee on the Fiscal Record (GAO/CBO support)';
+  formState.card.requiredSigs = 2;
+  formState.card.subcategories = [
     { id: 'sc-d1', label: 'Interstate Bridge Repair', parentCategory: null, quantitativeCap: 1.5e9, qualitativeRules: ['Priority: structurally deficient bridges rated <4', 'Must follow FHWA design standards'] },
     { id: 'sc-d2', label: 'Urban Transit Modernization', parentCategory: null, quantitativeCap: 1.2e9, qualitativeRules: ['ADA compliance required', 'Focus on underserved communities'] },
     { id: 'sc-d3', label: 'High-Speed Rail Corridors', parentCategory: null, quantitativeCap: 1e9, qualitativeRules: ['NEC and California HSR eligible', 'Environmental review required'] },
@@ -1757,191 +2043,202 @@ async function startGuidedDemo() {
     { id: 'sc-d5', label: 'Port & Freight Infrastructure', parentCategory: null, quantitativeCap: 5e8, qualitativeRules: ['Coastal and inland waterway ports', 'Supply chain resilience focus'] }
   ];
   render();
-  await demoWaitForClick('Subcategories', 20, T,
-    'We\'ve defined <strong>5 subcategories</strong> totaling $5B: Interstate Bridge Repair ($1.5B), Urban Transit ($1.2B), High-Speed Rail ($1B), Rural Road & Broadband ($800M), and Port Infrastructure ($500M). Each has specific qualitative rules.');
+  await demoWaitForClick('Terms & Conditions', 20, T,
+    'The Card\'s <strong>Terms &amp; Conditions</strong> define 5 executable subcategories totaling $5B: Interstate Bridge Repair ($1.5B), Urban Transit ($1.2B), High-Speed Rail ($1B), Rural Road &amp; Broadband ($800M), Ports ($500M). Unlike today\'s committee report language, these terms <strong>bind spending at the software layer</strong>.');
   if (ab()) return;
 
-  // Step 21: Add signatories
-  formState.refinement.signatories = ['Sen. Patty Murray, Committee Chair', 'Sec. Pete Buttigieg, DOT'];
+  // Step 21: Budget Key signatures
+  formState.card.signatories = ['Sen. Patty Murray, Committee Chair (Budget Key)', 'Sec. Pete Buttigieg, DOT (Budget Key)'];
   render();
-  await demoWaitForClick('Multi-Sig', 21, T,
-    '<strong>Multi-signature requirements</strong> are set: the Committee Chair (Sen. Murray) and the DOT Secretary must both sign off. This ensures both legislative and executive accountability on how funds are allocated.');
+  await demoWaitForClick('Budget Keys', 21, T,
+    'Card issuance is co-signed with <strong>Budget Keys</strong> — secure digital signatures. Here the issuing committee chair and the receiving agency head both sign, formalizing the negotiated delegation between the branches.');
   if (ab()) return;
 
-  // Step 22: Run compliance check
-  if (authToRefine) {
-    formState.refinement.complianceResult = checkRefinementCompliance(formState.refinement.subcategories, authToRefine);
+  // Step 22: Run a FAILING protocol check
+  const origSubs = JSON.parse(JSON.stringify(formState.card.subcategories));
+  formState.card.subcategories[0].quantitativeCap = 3e9; // bump to make it exceed
+  if (lineToCard) {
+    formState.card.complianceResult = checkCardTermsCompliance(formState.card.subcategories, lineToCard);
   }
   render();
-  await demoWaitForClick('Compliance', 22, T,
-    `<strong>Compliance check: ${formState.refinement.complianceResult && formState.refinement.complianceResult.passed ? 'PASSED' : 'FAILED'}</strong>. The engine verified that subcategory caps sum within the original $5B authorization and that qualitative rules don't contradict the original restrictions.`);
+  await demoWaitForClick('Protocol Check', 22, T,
+    'We intentionally set Bridge Repair to <strong>$3B</strong>, pushing the T&amp;C total to <strong>$6.5B</strong> — beyond the $5B statutory line. The <strong>ATM Access Protocol check</strong> catches the violation and blocks issuance: the Card can never delegate more than the Record grants.');
   if (ab()) return;
 
-  // Step 23: Now demonstrate a FAILING compliance check
-  const origSubs = JSON.parse(JSON.stringify(formState.refinement.subcategories));
-  formState.refinement.subcategories[0].quantitativeCap = 3e9; // bump to make it exceed
-  if (authToRefine) {
-    formState.refinement.complianceResult = checkRefinementCompliance(formState.refinement.subcategories, authToRefine);
+  // Step 23: Fix and issue the Card
+  formState.card.subcategories = origSubs;
+  if (lineToCard) {
+    formState.card.complianceResult = checkCardTermsCompliance(formState.card.subcategories, lineToCard);
   }
   render();
-  await demoWaitForClick('Compliance', 23, T,
-    'We intentionally set the Bridge Repair subcategory to <strong>$3B</strong>, pushing the total to <strong>$6.5B</strong> — exceeding the $5B cap. The compliance engine <strong>catches this violation</strong> and blocks submission. This is a key safety feature.');
-  if (ab()) return;
-
-  // Step 24: Fix and submit
-  formState.refinement.subcategories = origSubs;
-  if (authToRefine) {
-    formState.refinement.complianceResult = checkRefinementCompliance(formState.refinement.subcategories, authToRefine);
-  }
-  render();
-  const refPayload = {
-    id: 'ref-demo-' + uid(), authorizationId: authToRefine ? authToRefine.id : '', committeeId: 'committee-demo',
-    committeeName: 'Senate Appropriations Committee',
-    subcategories: JSON.parse(JSON.stringify(formState.refinement.subcategories)),
-    signatories: [...formState.refinement.signatories], requiredSignatures: 2, status: 'approved'
+  const cardPayload = {
+    id: 'card-demo-' + uid(), creditLineId: lineToCard ? lineToCard.id : '', agencyId: 'dot',
+    committeeName: 'Joint Committee on the Fiscal Record (GAO/CBO support)',
+    termsAndConditions: JSON.parse(JSON.stringify(formState.card.subcategories)),
+    signatories: [...formState.card.signatories], requiredSignatures: 2,
+    issuedDate: new Date().toISOString(), status: 'active'
   };
-  Store.dispatch({ type: 'ADD_REFINEMENT', payload: refPayload });
-  formState.refinement = { subcategories: [], committeeName: '', requiredSigs: 1, signatories: [], complianceResult: null, visible: false };
+  Store.dispatch({ type: 'ISSUE_CARD', payload: cardPayload });
+  formState.card = { subcategories: [], committeeName: '', requiredSigs: 1, signatories: [], complianceResult: null, visible: false };
   render();
-  await demoWaitForClick('Refinement', 24, T,
-    'After fixing the amounts back to compliant values, the refinement was <strong>submitted and approved</strong>. The DOT authorization now has detailed, auditable subcategories. In the real system, this replaces opaque OMB discretion.');
+  await demoWaitForClick('Card Issued', 23, T,
+    'With compliant amounts, the <strong>Public Credit Card is issued</strong>. DOT now holds an activated Purse Key whose Terms &amp; Conditions travel with every future draw and spend. On to the ATM.');
   if (ab()) return;
 
-  // ===== PHASE 3: AGENCY SPENDING =====
+  // ===== PHASE 3: COINING (ATM draws) =====
   Store.dispatch({ type: 'SET_VIEW', payload: 'agency' });
+  Store.dispatch({ type: 'SELECT_AGENCY', payload: 'dot' });
   render();
-  await demoWaitForClick('Spending', 25, T,
-    'We\'ve entered <strong>Phase 3: Agency Spending</strong>. This dashboard shows agencies that have been funded through enacted legislation. Each agency has a credit limit and can draw funds within their authorized categories.');
+  await demoWaitForClick('Coining', 24, T,
+    '<strong>Phase 3: Coining.</strong> This is DOT\'s dashboard: its <strong>ePurse</strong> (a locally hosted hardware wallet) holds <strong>$0</strong> — the $5B credit line is power, not money. Drawing at <strong>Congress\'s Treasury ATM</strong> creates brand-new eCoins <em>de novo</em>, loaded onto the ePurse, 24/7, with no Treasury or Federal Reserve intermediation and no bond issuance.');
   if (ab()) return;
 
-  // Step 26: Select DOT
-  const dotAgency = Store.getState().agencies.find(a => a.id === 'dot');
-  if (dotAgency) Store.dispatch({ type: 'SELECT_AGENCY', payload: 'dot' });
-  render();
-  await demoWaitForClick('DOT Dashboard', 26, T,
-    'The <strong>DOT dashboard</strong> shows a $5B credit limit with breakdown by authorization category. The progress bars track spending in real time. Let\'s submit some transactions.');
-  if (ab()) return;
-
-  // Step 27: First transaction - approved
-  const dotAuth = dotAgency ? dotAgency.authorizations.find(a => a.agencyId === 'dot') : (enactedBill ? enactedBill.authorizations[0] : null);
-  const dotState = Store.getState();
-  const dotAg = dotState.agencies.find(a => a.id === 'dot');
-  const dotAuthLive = dotAg && dotAg.authorizations.length > 0 ? dotAg.authorizations[0] : null;
-  if (dotAuthLive) {
-    const tx1 = {
-      id: 'tx-demo-1', agencyId: 'dot', authorizationId: dotAuthLive.id,
-      amount: 250e6, category: 'Bridge & Highway Repair',
-      description: 'I-95 Delaware River Bridge rehabilitation project',
-      timestamp: new Date().toISOString(), status: 'pending',
-      complianceCheck: { passed: true, violations: [], checkedAgainst: [] }
-    };
-    const c1 = checkTransactionCompliance(tx1, dotAuthLive, dotAg, dotState.transactions);
-    tx1.complianceCheck = c1;
-    tx1.status = c1.passed ? 'approved' : 'rejected';
-    Store.dispatch({ type: 'ADD_TRANSACTION', payload: tx1 });
+  // Step 25: First draw — approved
+  const dotLineId = lineToCard ? lineToCard.id : null;
+  function demoTx(fields) {
+    return Object.assign({ id: 'tx-demo-' + uid(), agencyId: 'dot', creditLineId: dotLineId,
+      category: null, description: '', timestamp: new Date().toISOString(), status: 'pending',
+      complianceCheck: { passed: true, violations: [], checkedAgainst: [] } }, fields);
+  }
+  if (dotLineId) {
+    const st = Store.getState();
+    const line = findCreditLine(st, dotLineId);
+    const card = cardForLine(st, dotLineId);
+    const d1 = demoTx({ type: 'draw', amount: 1.5e9, description: 'Initial eCoin draw for FY26 obligations' });
+    const c1 = checkDrawCompliance(d1, line, card, st.transactions);
+    d1.complianceCheck = c1; d1.status = c1.passed ? 'approved' : 'rejected';
+    Store.dispatch({ type: 'ADD_TRANSACTION', payload: d1 });
     render();
   }
-  await demoWaitForClick('Transaction', 27, T,
-    '<strong>Transaction approved: $250M</strong> for I-95 Delaware River Bridge rehabilitation. The compliance engine verified it\'s within the Bridge & Highway Repair category cap, the authorization time limit hasn\'t expired, and the agency credit limit isn\'t exceeded.');
+  await demoWaitForClick('ATM Draw', 25, T,
+    '<strong>Draw approved: $1.5B in new eCoins</strong> now sit on DOT\'s ePurse. The ATM verified the Card, the handbrake status, the period of availability, and the cumulative cap. Government-wide <strong>outstanding eCoins just grew by $1.5B</strong> — deficits are money-financed by design under the NDFR.');
   if (ab()) return;
 
-  // Step 28: Second transaction - approved
-  if (dotAuthLive) {
-    const st2 = Store.getState();
-    const ag2 = st2.agencies.find(a => a.id === 'dot');
-    const tx2 = {
-      id: 'tx-demo-2', agencyId: 'dot', authorizationId: dotAuthLive.id,
-      amount: 180e6, category: 'Public Transit Expansion',
-      description: 'Philadelphia-Camden light rail extension',
-      timestamp: new Date(Date.now() + 1000).toISOString(), status: 'pending',
-      complianceCheck: { passed: true, violations: [], checkedAgainst: [] }
-    };
-    const c2 = checkTransactionCompliance(tx2, dotAuthLive, ag2, st2.transactions);
-    tx2.complianceCheck = c2;
-    tx2.status = c2.passed ? 'approved' : 'rejected';
-    Store.dispatch({ type: 'ADD_TRANSACTION', payload: tx2 });
+  // Step 26: Excessive draw — rejected
+  if (dotLineId) {
+    const st = Store.getState();
+    const line = findCreditLine(st, dotLineId);
+    const card = cardForLine(st, dotLineId);
+    const d2 = demoTx({ type: 'draw', amount: 6e9, description: 'Attempted draw beyond the credit line' });
+    const c2 = checkDrawCompliance(d2, line, card, st.transactions);
+    d2.complianceCheck = c2; d2.status = c2.passed ? 'approved' : 'rejected';
+    Store.dispatch({ type: 'ADD_TRANSACTION', payload: d2 });
+    formState.expandedTxId = d2.id;
     render();
   }
-  await demoWaitForClick('Transaction', 28, T,
-    '<strong>Second transaction approved: $180M</strong> for a light rail extension under Public Transit Expansion. Notice the credit bar updating — DOT has now spent $430M of its $5B authorization.');
+  await demoWaitForClick('ATM Draw', 26, T,
+    '<strong>Draw REJECTED: $6B</strong> — cumulative draws would exceed the $5B credit line. The quantitative cap is enforced in the ATM\'s software, not by an OMB apportionment memo or a Treasury official\'s discretion.');
   if (ab()) return;
 
-  // Step 29: Rejected transaction - exceeds category cap
-  if (dotAuthLive) {
-    const st3 = Store.getState();
-    const ag3 = st3.agencies.find(a => a.id === 'dot');
-    const tx3 = {
-      id: 'tx-demo-3', agencyId: 'dot', authorizationId: dotAuthLive.id,
-      amount: 2e9, category: 'Bridge & Highway Repair',
-      description: 'Nationwide highway resurfacing mega-project',
-      timestamp: new Date(Date.now() + 2000).toISOString(), status: 'pending',
-      complianceCheck: { passed: true, violations: [], checkedAgainst: [] }
-    };
-    const c3 = checkTransactionCompliance(tx3, dotAuthLive, ag3, st3.transactions);
-    tx3.complianceCheck = c3;
-    tx3.status = c3.passed ? 'approved' : 'rejected';
-    Store.dispatch({ type: 'ADD_TRANSACTION', payload: tx3 });
-    formState.expandedTxId = tx3.id;
+  // ===== PHASE 4: SPENDING =====
+  if (dotLineId) {
+    const st = Store.getState();
+    const line = findCreditLine(st, dotLineId);
+    const card = cardForLine(st, dotLineId);
+    const s1 = demoTx({ type: 'spend', amount: 250e6, category: 'Interstate Bridge Repair', description: 'I-95 Delaware River Bridge rehabilitation project' });
+    const cs1 = checkSpendCompliance(s1, line, card, 'dot', st.transactions);
+    s1.complianceCheck = cs1; s1.status = cs1.passed ? 'approved' : 'rejected';
+    Store.dispatch({ type: 'ADD_TRANSACTION', payload: s1 });
+    formState.expandedTxId = null;
     render();
   }
-  await demoWaitForClick('Rejected', 29, T,
-    '<strong>Transaction REJECTED: $2B</strong> for highway resurfacing. The compliance engine caught that this <strong>exceeds the authorization cap</strong> — there isn\'t enough remaining in the Bridge & Highway category. Click the row to see violation details.');
+  await demoWaitForClick('Spending', 27, T,
+    '<strong>Phase 4: Spending. $250M approved</strong> for I-95 bridge rehabilitation — the purpose matches the Card\'s "Interstate Bridge Repair" terms and the eCoins left DOT\'s ePurse for circulation. ePurse balance: <strong>$1.25B</strong>.');
   if (ab()) return;
 
-  // Step 30: Invalid category transaction
-  if (dotAuthLive) {
-    const st4 = Store.getState();
-    const ag4 = st4.agencies.find(a => a.id === 'dot');
-    const tx4 = {
-      id: 'tx-demo-4', agencyId: 'dot', authorizationId: dotAuthLive.id,
-      amount: 50e6, category: 'Military Equipment',
-      description: 'Armored vehicle procurement',
-      timestamp: new Date(Date.now() + 3000).toISOString(), status: 'pending',
-      complianceCheck: { passed: true, violations: [], checkedAgainst: [] }
-    };
-    const c4 = checkTransactionCompliance(tx4, dotAuthLive, ag4, st4.transactions);
-    tx4.complianceCheck = c4;
-    tx4.status = c4.passed ? 'approved' : 'rejected';
-    Store.dispatch({ type: 'ADD_TRANSACTION', payload: tx4 });
-    formState.expandedTxId = tx4.id;
+  // Step 28: Spend beyond the ePurse balance — rejected (Antideficiency)
+  if (dotLineId) {
+    const st = Store.getState();
+    const line = findCreditLine(st, dotLineId);
+    const card = cardForLine(st, dotLineId);
+    const s2 = demoTx({ type: 'spend', amount: 2e9, category: 'Urban Transit Modernization', description: 'Nationwide transit modernization mega-award' });
+    const cs2 = checkSpendCompliance(s2, line, card, 'dot', st.transactions);
+    s2.complianceCheck = cs2; s2.status = cs2.passed ? 'approved' : 'rejected';
+    Store.dispatch({ type: 'ADD_TRANSACTION', payload: s2 });
+    formState.expandedTxId = s2.id;
     render();
   }
-  await demoWaitForClick('Rejected', 30, T,
-    '<strong>Transaction REJECTED: $50M</strong> for "Military Equipment." This category is <strong>not authorized</strong> under the DOT infrastructure authorization. The ledger enforces qualitative restrictions — agencies can only spend on authorized categories.');
+  await demoWaitForClick('Spending', 28, T,
+    '<strong>Spend REJECTED: $2B</strong> — DOT only holds $1.25B on its ePurse (and the transit subcategory is capped at $1.2B). You cannot spend eCoins you haven\'t drawn: the <strong>Antideficiency Act\'s</strong> no-spending-in-excess rule, enforced by the wallet itself.');
   if (ab()) return;
 
-  // Step 31: Show the transaction log
+  // Step 29: Off-purpose spend — rejected
+  if (dotLineId) {
+    const st = Store.getState();
+    const line = findCreditLine(st, dotLineId);
+    const card = cardForLine(st, dotLineId);
+    const s3 = demoTx({ type: 'spend', amount: 50e6, category: 'Military Equipment', description: 'Armored vehicle procurement' });
+    const cs3 = checkSpendCompliance(s3, line, card, 'dot', st.transactions);
+    s3.complianceCheck = cs3; s3.status = cs3.passed ? 'approved' : 'rejected';
+    Store.dispatch({ type: 'ADD_TRANSACTION', payload: s3 });
+    formState.expandedTxId = s3.id;
+    render();
+  }
+  await demoWaitForClick('Spending', 29, T,
+    '<strong>Spend REJECTED: $50M</strong> for "Military Equipment" — not a purpose on the Card\'s Terms &amp; Conditions. This is the <strong>purpose statute</strong> (31 U.S.C. 1301(a)) as executable code: appropriations may only be applied to their objects.');
+  if (ab()) return;
+
+  // Step 30: Ledger review
   formState.expandedTxId = null;
   render();
-  await demoWaitForClick('Audit Trail', 31, T,
-    'The <strong>Transaction Log</strong> provides a full audit trail. Every transaction — approved or rejected — is recorded with timestamps, compliance results, and violation details. Click any row to expand compliance details.');
+  await demoWaitForClick('Ledger Node', 30, T,
+    'DOT\'s <strong>ledger node</strong> records every draw and spend — approved or rejected — with the compliance findings attached. Click any row for details. This local node is DOT\'s slice of the <strong>Federated Federal Ledger</strong>.');
   if (ab()) return;
 
-  // Step 32: Switch to another agency (DOE)
-  const doeAg = Store.getState().agencies.find(a => a.id === 'doe');
-  if (doeAg && doeAg.creditLimit > 0) {
-    Store.dispatch({ type: 'SELECT_AGENCY', payload: 'doe' });
+  // ===== PHASE 5: PUBLISHING =====
+  Store.dispatch({ type: 'SET_VIEW', payload: 'record' });
+  render();
+  await demoWaitForClick('Publishing', 31, T,
+    '<strong>Phase 5: Publishing.</strong> Agency nodes sync automatically to Congress\'s super-node: the <strong>Public Statement and Account</strong> (Art. I, &sect; 9, cl. 7, as a live dashboard). Read the aggregates: appropriated, drawn, held, spent, collected, outstanding. Budgetary obfuscation gets structurally harder.');
+  if (ab()) return;
+
+  // Step 32: Financing handbrake — freeze
+  if (dotLineId) Store.dispatch({ type: 'SET_LINE_FROZEN', payload: { lineId: dotLineId, frozen: true } });
+  render();
+  await demoWaitForClick('Handbrake', 32, T,
+    'Congress just passed a Joint Resolution activating the <strong>financing handbrake</strong> on DOT\'s line — the NDFR\'s replacement for the debt ceiling. Instead of the Treasury Secretary running out of cash and dictating terms, <strong>only Congress</strong> can suspend new draws (subject to presidential veto and override). The parliamentary finger is on the button.');
+  if (ab()) return;
+
+  // Step 33: Draw while frozen — rejected
+  if (dotLineId) {
+    const st = Store.getState();
+    const line = findCreditLine(st, dotLineId);
+    const card = cardForLine(st, dotLineId);
+    const d3 = demoTx({ type: 'draw', amount: 5e8, description: 'Draw attempted during handbrake freeze' });
+    const c3 = checkDrawCompliance(d3, line, card, st.transactions);
+    d3.complianceCheck = c3; d3.status = c3.passed ? 'approved' : 'rejected';
+    Store.dispatch({ type: 'ADD_TRANSACTION', payload: d3 });
     render();
-    await demoWaitForClick('DOE', 32, T,
-      'Switching to <strong>DOE (Department of Energy)</strong> — funded with $3B for clean energy. Each agency has its own independent credit limit, authorization categories, and compliance rules. The ledger prevents cross-agency fund mixing.');
-  } else {
-    await demoWaitForClick('Agencies', 32, T,
-      'Each funded agency has its own independent dashboard with <strong>separate credit limits, authorization categories, and compliance rules</strong>. The ledger prevents cross-agency fund mixing and provides per-agency audit trails.');
   }
+  await demoWaitForClick('Handbrake', 33, T,
+    'DOT tried to draw <strong>$500M</strong> during the freeze — <strong>REJECTED at the ATM</strong>. Note what is <em>not</em> affected: eCoins already on the ePurse remain spendable, and the freeze is a deliberate, attributable act of Congress rather than an executive-branch improvisation.');
   if (ab()) return;
 
-  // Step 33: Go back to legislative to show second bill
+  // Step 34: Lift the freeze, record collections
+  if (dotLineId) Store.dispatch({ type: 'SET_LINE_FROZEN', payload: { lineId: dotLineId, frozen: false } });
+  Store.dispatch({ type: 'ADD_TRANSACTION', payload: {
+    id: 'tx-demo-collect', type: 'collect', agencyId: null, creditLineId: null,
+    amount: 3e8, category: null, description: 'Q3 tax receipts redeemed (eCoins deleted)',
+    timestamp: new Date().toISOString(), status: 'approved',
+    complianceCheck: { passed: true, violations: [], checkedAgainst: ['Collections are recorded and deleted from outstanding eCoins'] }
+  }});
+  render();
+  await demoWaitForClick('Collections', 34, T,
+    'Freeze lifted, and <strong>$300M in tax receipts</strong> just arrived. Under the NDFR taxes don\'t "fund" spending — collected eCoins are <strong>deleted</strong>, shrinking outstanding money. Watch the <strong>Collected</strong> and <strong>Outstanding</strong> figures move: spend creates, tax deletes.');
+  if (ab()) return;
+
+  // Step 35: Second bill
   Store.dispatch({ type: 'SET_VIEW', payload: 'legislative' });
   Store.dispatch({ type: 'SELECT_BILL', payload: 'bill-002' });
   formState.activeTab = 'authorizations';
   render();
-  await demoWaitForClick('Second Bill', 33, T,
-    'Back in the Legislative phase, here\'s the <strong>Public Health Emergency Preparedness Act</strong> — a second bill funding HHS ($5B) and EPA ($2.5B). Multiple bills can be tracked simultaneously, each with independent authorizations and vote records.');
+  await demoWaitForClick('Second Bill', 35, T,
+    'Back on the Record: the <strong>Public Health Emergency Preparedness Act</strong> appropriates credit lines for HHS ($5B) and EPA ($2.5B). Each line gets its own Card, draws, and ledger trail — agencies\' fiscal affairs stay decentralized while Congress keeps the consolidated books.');
   if (ab()) return;
 
-  // Step 34: Closing
-  await demoWaitForClick('Complete', 34, T,
-    '<strong>Demo complete!</strong> You\'ve seen all three phases: legislative drafting &amp; voting (with veto override), committee refinement with compliance checking, and agency spending with real-time enforcement. The app is fully interactive — feel free to explore on your own.');
+  // Step 36: Closing
+  await demoWaitForClick('Complete', 36, T,
+    '<strong>Demo complete!</strong> You walked the NDFR\'s five phases — <strong>Appropriating</strong> (credit lines on the Fiscal Record), <strong>Drawing</strong> (Public Credit Card issuance), <strong>Coining</strong> (eCoins created at Congress\'s Treasury ATM), <strong>Spending</strong> (ePurse-enforced purpose/amount/time limits), and <strong>Publishing</strong> (the live Public Statement and Account) — plus the financing handbrake and tax-deletion mechanics. Explore freely.');
   if (ab()) return;
 
   // Clean up
