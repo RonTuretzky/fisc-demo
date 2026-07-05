@@ -262,7 +262,7 @@ function formatDate(d) {
   return dt.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
 }
 function statusLabel(s) {
-  const m = { draft:'Draft', house_floor:'House Floor', house_voting:'House Voting', house_passed:'House Passed',
+  const m = { draft:'Draft', in_committee:'In Committee', house_floor:'House Floor', house_voting:'House Voting', house_passed:'House Passed',
     house_failed:'House Failed', senate_floor:'Senate Floor', senate_voting:'Senate Voting', senate_passed:'Senate Passed',
     senate_failed:'Senate Failed', presidential_review:'Presidential Review', signed:'Signed', vetoed:'Vetoed',
     veto_override_house:'Veto Override (House)', veto_override_senate:'Veto Override (Senate)', enacted:'Enacted', failed:'Failed' };
@@ -273,7 +273,7 @@ function statusBadgeClass(s) {
   if (['failed','house_failed','senate_failed','vetoed'].includes(s)) return 'badge--red';
   if (['house_voting','senate_voting','veto_override_house','veto_override_senate'].includes(s)) return 'badge--amber';
   if (s === 'presidential_review') return 'badge--purple';
-  if (['house_floor','senate_floor'].includes(s)) return 'badge--blue';
+  if (['house_floor','senate_floor','in_committee'].includes(s)) return 'badge--blue';
   return 'badge--slate';
 }
 function uid() { return Date.now().toString(36) + Math.random().toString(36).substr(2, 6); }
@@ -1095,6 +1095,7 @@ function renderVoteTab(bill) {
   const steps = getStepperState(bill);
   return `<div>
     ${renderStepper(steps)}
+    ${renderCommitteeStage(bill, s)}
     ${renderVoteSection(bill, 'house', v, s)}
     ${renderVoteSection(bill, 'senate', v, s)}
     ${renderPresidentialSection(bill, v, s)}
@@ -1107,22 +1108,24 @@ function renderVoteTab(bill) {
 function getStepperState(bill) {
   const s = bill.status;
   const steps = [
+    { label: 'Committee', state: 'pending' },
     { label: 'House Vote', state: 'pending' },
     { label: 'Senate Vote', state: 'pending' },
     { label: 'Presidential', state: 'pending' },
     { label: 'Enacted', state: 'pending' }
   ];
-  const idx = ['draft','house_floor','house_voting'].includes(s) ? 0 :
-    ['house_passed','house_failed','senate_floor','senate_voting'].includes(s) ? 1 :
-    ['senate_passed','senate_failed','presidential_review','signed','vetoed','veto_override_house','veto_override_senate'].includes(s) ? 2 :
-    s === 'enacted' ? 3 : 0;
-  for (let i = 0; i < 4; i++) {
+  const idx = ['draft','in_committee'].includes(s) ? 0 :
+    ['house_floor','house_voting'].includes(s) ? 1 :
+    ['house_passed','house_failed','senate_floor','senate_voting'].includes(s) ? 2 :
+    ['senate_passed','senate_failed','presidential_review','signed','vetoed','veto_override_house','veto_override_senate'].includes(s) ? 3 :
+    s === 'enacted' ? 4 : 0;
+  for (let i = 0; i < 5; i++) {
     if (i < idx) steps[i].state = 'done';
     else if (i === idx) steps[i].state = 'active';
   }
-  if (s === 'enacted') steps[3].state = 'done';
-  if (['house_failed','failed'].includes(s)) { steps[0].state = 'failed'; steps[1].state = 'pending'; steps[2].state = 'pending'; steps[3].state = 'pending'; }
-  if (s === 'senate_failed') { steps[0].state = 'done'; steps[1].state = 'failed'; }
+  if (s === 'enacted') steps[4].state = 'done';
+  if (['house_failed','failed'].includes(s)) { steps[0].state = 'done'; steps[1].state = 'failed'; steps[2].state = 'pending'; steps[3].state = 'pending'; steps[4].state = 'pending'; }
+  if (s === 'senate_failed') { steps[0].state = 'done'; steps[1].state = 'done'; steps[2].state = 'failed'; }
   return steps;
 }
 
@@ -1136,23 +1139,44 @@ function renderStepper(steps) {
   `).join('')}</div>`;
 }
 
+// Committee referral & markup precede floor action: this is where real bills
+// (especially appropriations bills) are actually shaped, long before any
+// floor vote. The demo compresses referral -> markup -> report into two clicks.
+function renderCommitteeStage(bill, status) {
+  const past = !['draft','in_committee'].includes(status);
+  return `<div class="card mb-4">
+    <div class="card__header"><h3>Committee of Jurisdiction</h3><span class="text-sm text-muted">referral &middot; markup &middot; report</span></div>
+    <div class="card__body">
+      <p class="text-xs text-muted mb-2">Appropriation bills originate in the House by longstanding custom (revenue bills by the Origination Clause, Art. I, &sect; 7) and are referred to the Appropriations Committee for markup before floor consideration. Amendments proposed during markup appear in the Amendments tab.</p>
+      ${status === 'draft' ? `<button class="btn btn--primary" data-action="refer-committee" data-bill-id="${bill.id}">Refer to House Appropriations Committee</button>` : ''}
+      ${status === 'in_committee' ? `<div class="alert alert--info mb-2">Markup underway. Propose or adopt amendments in the Amendments tab, then report the bill.</div><button class="btn btn--primary" data-action="report-bill" data-bill-id="${bill.id}">Report Bill to the House Floor</button>` : ''}
+      ${past ? '<div class="alert alert--success">Reported to the House floor with committee amendments incorporated.</div>' : ''}
+    </div>
+  </div>`;
+}
+
 function renderVoteSection(bill, chamber, votes, status) {
   const isHouse = chamber === 'house';
   const total = isHouse ? 435 : 100;
   const label = isHouse ? 'House of Representatives' : 'United States Senate';
   const count = isHouse ? votes.houseCount : votes.senateCount;
   const cast = count ? count.yea + count.nay + count.present + count.absent : 0;
+  const needsCloture = !isHouse && status === 'house_passed' && !(votes.cloture && votes.cloture.invoked);
   const canVote = isHouse ?
-    ['draft','house_floor','house_voting'].includes(status) :
-    ['house_passed','senate_floor','senate_voting'].includes(status);
+    ['house_floor','house_voting'].includes(status) :
+    ['senate_floor','senate_voting'].includes(status);
   const passed = majorityPassed(count);
   const voteDone = cast >= total;
   const needed = majorityNeeded(count);
+  const tied = voteDone && count && count.yea === count.nay && !votes.vpTieBreak;
 
   return `<div class="card mb-4">
     <div class="card__header"><h3>${label}</h3><span class="text-sm text-muted"><span id="${chamber}-cast">${cast}</span> / ${total} votes cast</span></div>
     <div class="card__body">
-      <p class="text-xs text-muted mb-2">Passage requires a majority of Members present and voting (a quorum being present)${isHouse ? '' : ' — the Vice President breaks a tie. Most Senate business also needs 60 votes to invoke cloture; the NDFR would flip that presumption for budgetary law'}.</p>
+      <p class="text-xs text-muted mb-2">Passage requires a majority of Members present and voting (a quorum being present)${isHouse ? '' : ' — the Vice President breaks a tie. The Senate acts on the identical text passed by the House; any Senate amendment would require a conference or amendment exchange before presentment'}.</p>
+      ${!isHouse && needsCloture ? `<div class="alert alert--warning mb-2"><strong>Cloture required.</strong> Most measures need 60 votes to end debate before a passage vote (Senate Rule XXII). Budget reconciliation bills bypass this — and the NDFR would flip the default, treating budgetary law as majority-vote business.${votes.cloture && !votes.cloture.invoked ? ` Last motion failed: ${votes.cloture.yea}–${votes.cloture.nay}.` : ''}</div>
+      <button class="btn btn--primary mb-2" data-action="file-cloture" data-bill-id="${bill.id}">File Cloture Motion (60 votes to proceed)</button>` : ''}
+      ${!isHouse && votes.cloture && votes.cloture.invoked ? `<p class="text-xs mb-2" style="color:var(--green-600);">Cloture invoked ${votes.cloture.yea}&ndash;${votes.cloture.nay}. Debate closed; proceeding to the passage vote.</p>` : ''}
       <div class="tally">
         <div class="tally__counts">
           <span style="color:var(--green-600)">Yea: <span id="${chamber}-yea-count">${count ? count.yea : 0}</span></span>
@@ -1166,7 +1190,10 @@ function renderVoteSection(bill, chamber, votes, status) {
           <div class="tally__threshold" style="left:50%"><span class="tally__threshold-label">majority</span></div>
         </div>
       </div>
-      ${voteDone ? `<div class="alert ${passed ? 'alert--success' : 'alert--error'}">${passed ? 'PASSED' : 'FAILED'}: ${count.yea} yea, ${count.nay} nay &mdash; ${needed} of the ${count.yea + count.nay} Members voting needed</div>` : ''}
+      ${voteDone && !tied ? `<div class="alert ${passed ? 'alert--success' : 'alert--error'}">${passed ? 'PASSED' : 'FAILED'}: ${count.yea} yea, ${count.nay} nay &mdash; ${needed} of the ${count.yea + count.nay} Members voting needed${votes.vpTieBreak && !isHouse ? ' (including the Vice President\'s tie-breaking vote)' : ''}</div>` : ''}
+      ${tied && !isHouse ? `<div class="alert alert--warning">TIED: ${count.yea}&ndash;${count.nay}. The Vice President may cast the deciding vote (Art. I, &sect; 3).</div>
+      <button class="btn btn--primary" data-action="vp-tiebreak" data-bill-id="${bill.id}">Vice President Votes Aye</button>` : ''}
+      ${tied && isHouse ? `<div class="alert alert--error">TIED: ${count.yea}&ndash;${count.nay}. A tie vote fails in the House — there is no tie-breaker.</div>` : ''}
       ${canVote && !voteDone ? `<button class="btn btn--primary" data-action="simulate-vote" data-chamber="${chamber}" data-bill-id="${bill.id}" ${voteAnimating ? 'disabled' : ''}>Simulate ${isHouse ? 'House' : 'Senate'} Vote</button>` : ''}
     </div>
   </div>`;
@@ -1525,6 +1552,22 @@ function renderRecord(state) {
         <button class="btn btn--outline" data-action="submit-collection">Record Collection</button>
       </div>
     </div>
+    <div class="card card--flush mb-4">
+      <div class="card__header"><h3>How This Works Today vs. Under the NDFR</h3><span class="text-sm text-muted">what each demo stage replaces</span></div>
+      <div class="table-wrap"><table>
+        <thead><tr><th style="width:18%">Stage</th><th style="width:44%">Today (statute / system)</th><th>Under the NDFR (this demo)</th></tr></thead>
+        <tbody class="text-sm">
+          <tr><td><strong>Budget authority</strong></td><td>An appropriations act; a bare authorization confers none (GAO, <em>Principles of Federal Appropriations Law</em>)</td><td>Public Credit line recorded on the Congressional Fiscal Record</td></tr>
+          <tr><td><strong>Making it spendable</strong></td><td>Treasury appropriation warrant (31 U.S.C. 3323); TAFS account in Treasury's central accounting system (CARS); Fund Balance with Treasury</td><td>Public Credit Card issued by Congress under the ATM Access Protocol</td></tr>
+          <tr><td><strong>Subdividing authority</strong></td><td>OMB apportionment (SF-132; 31 U.S.C. 1512&ndash;1513), then agency allotments</td><td>Card Terms &amp; Conditions compiled by congressional organs (GAO/CBO support)</td></tr>
+          <tr><td><strong>Moving money</strong></td><td>Bureau of the Fiscal Service disburses ~88% of federal payments (PAM/SPS via Fedwire, ACH, checks), debiting the Treasury General Account at the Fed; DoD and other Non-Treasury Disbursing Offices handle the rest; certifying and disbursing officers are separate accountable roles (31 U.S.C. 3321, 3528)</td><td>eCoins created <em>de novo</em> at Congress's Treasury ATM and spent peer-to-peer from agency ePurses</td></tr>
+          <tr><td><strong>Financing deficits</strong></td><td>Treasury auctions marketable securities through primary dealers, under the debt limit (31 U.S.C. 3101)</td><td>New eCoins at draw time; the Fed issues its own securities ("silver" eCoins) purely for monetary policy</td></tr>
+          <tr><td><strong>Taxes &amp; receipts</strong></td><td>Deposited to the Treasury (Miscellaneous Receipts Act, 31 U.S.C. 3302(b)); mechanically unrelated to any spending pipeline</td><td>Collected eCoins are deleted from outstanding money</td></tr>
+          <tr><td><strong>Spending controls</strong></td><td>Antideficiency Act at obligation (31 U.S.C. 1341, 1517); purpose statute (1301(a)); period of availability (1502)</td><td>The same purpose&ndash;time&ndash;amount controls, compiled into Card/ATM software</td></tr>
+          <tr><td><strong>Emergency brake</strong></td><td>Debt ceiling and its suspensions; Treasury "extraordinary measures" when it binds</td><td>Congressional handbrake: Joint Resolution freeze, per line or ATM-wide</td></tr>
+        </tbody>
+      </table></div>
+    </div>
     <div class="card card--flush">
       <div class="card__header"><h3>Recent Ledger Activity (all nodes)</h3></div>
       <div class="table-wrap"><table>
@@ -1663,6 +1706,29 @@ function handleAction(action, data, state) {
     case 'reject-amendment':
       Store.dispatch({ type: 'UPDATE_AMENDMENT_STATUS', payload: { billId: data.billId, amendmentId: data.amendmentId, status: 'rejected' } });
       break;
+    case 'refer-committee':
+      Store.dispatch({ type: 'UPDATE_BILL_STATUS', payload: { billId: data.billId, status: 'in_committee' } });
+      break;
+    case 'report-bill':
+      Store.dispatch({ type: 'UPDATE_BILL_STATUS', payload: { billId: data.billId, status: 'house_floor' } });
+      break;
+    case 'file-cloture': {
+      // Senate Rule XXII: three-fifths of the full Senate (60) to end debate.
+      const yea = 55 + Math.floor(Math.random() * 12); // 55-66
+      const nay = 100 - yea - Math.floor(Math.random() * 3);
+      const invoked = yea >= 60;
+      Store.dispatch({ type: 'UPDATE_VOTES', payload: { billId: data.billId, votes: { cloture: { yea, nay, invoked } } } });
+      if (invoked) Store.dispatch({ type: 'UPDATE_BILL_STATUS', payload: { billId: data.billId, status: 'senate_floor' } });
+      break;
+    }
+    case 'vp-tiebreak': {
+      const b = Store.getState().bills.find(b => b.id === data.billId);
+      if (!b || !b.votes.senateCount || b.votes.senateCount.yea !== b.votes.senateCount.nay) return;
+      const newCount = Object.assign({}, b.votes.senateCount, { yea: b.votes.senateCount.yea + 1 });
+      Store.dispatch({ type: 'UPDATE_VOTES', payload: { billId: data.billId, votes: { senateCount: newCount, vpTieBreak: true } } });
+      Store.dispatch({ type: 'UPDATE_BILL_STATUS', payload: { billId: data.billId, status: 'senate_passed' } });
+      break;
+    }
     case 'simulate-vote':
       Store.dispatch({ type: 'UPDATE_BILL_STATUS', payload: { billId: data.billId, status: data.chamber === 'house' ? 'house_voting' : 'senate_voting' } });
       setTimeout(() => startVoteAnimation(data.chamber, data.billId, false), 50);
@@ -1942,7 +2008,7 @@ async function startGuidedDemo() {
   Store._notify();
   document.body.classList.add('demo-active');
 
-  const T = 38; // total steps
+  const T = 40; // total steps
   const billId = 'bill-001';
 
   // Helper to bail early
@@ -1950,7 +2016,7 @@ async function startGuidedDemo() {
 
   // ===== PHASE 1: APPROPRIATING =====
   await demoWaitForClick('NDFR', 1, T,
-    'Welcome to the <strong>Congressional Fiscal Ledger</strong> — a toy model of the <strong>New Digital Fiscal Regime</strong> from Rohan Grey\'s <em>Digitizing the Fisc</em>. We\'ll walk its five phases: <strong>Appropriating &rarr; Drawing &rarr; Coining &rarr; Spending &rarr; Publishing</strong>. Click <strong>Next</strong> to begin.');
+    'Welcome to the <strong>Congressional Fiscal Ledger</strong> — a toy model of the <strong>New Digital Fiscal Regime</strong> from Rohan Grey\'s <em>Digitizing the Fisc</em>. We\'ll walk its five phases: <strong>Appropriating &rarr; Drawing &rarr; Coining &rarr; Spending &rarr; Publishing</strong> — through the real legislative gauntlet. Click <strong>Next</strong> to begin.');
   if (ab()) return;
 
   // Step 2: Select bill
@@ -1967,14 +2033,22 @@ async function startGuidedDemo() {
     'The <strong>Public Credit Lines tab</strong> shows three color-coded appropriations: <strong>$5B for DOT</strong> (blue), <strong>$3B for DOE</strong> (green), and <strong>$2B for NSF</strong> (orange). Each is a delegation of spending <em>power</em> — a numbered credit line with categories, caps, restrictions, and a period of availability. No dollars exist yet.');
   if (ab()) return;
 
-  // Step 4: Propose an amendment
-  formState.activeTab = 'amendments';
+  // Step 4: Refer to committee
+  Store.dispatch({ type: 'UPDATE_BILL_STATUS', payload: { billId, status: 'in_committee' } });
+  formState.activeTab = 'vote';
   render();
-  await demoWaitForClick('Amendments', 4, T,
-    'The Fiscal Record treats legislation as <strong>natively digital text with version control</strong>. Legislators propose amendments as diffs against the bill. Let\'s add one.');
+  await demoWaitForClick('Committee', 4, T,
+    'Before any floor vote, the bill is <strong>referred to the House Appropriations Committee</strong> — appropriation bills originate in the House by longstanding custom (revenue bills by the Origination Clause). <strong>Markup is where real bills are shaped</strong>: today\'s committee stage, not the floor, decides most of what an appropriations act says.');
   if (ab()) return;
 
-  // Step 5: Create amendment
+  // Step 5: Amendments as markup
+  formState.activeTab = 'amendments';
+  render();
+  await demoWaitForClick('Markup', 5, T,
+    'During markup, members propose amendments as <strong>diffs against the bill text</strong> — the Fiscal Record treats legislation as natively digital, version-controlled text. Let\'s add one.');
+  if (ab()) return;
+
+  // Step 6: Create amendment
   const amendId = 'amend-demo-' + uid();
   Store.dispatch({ type: 'ADD_AMENDMENT', payload: { billId, amendment: {
     id: amendId, billId, author: 'Rep. Rashida Tlaib [D-MI]', timestamp: new Date().toISOString(),
@@ -1983,26 +2057,27 @@ async function startGuidedDemo() {
     status: 'proposed'
   }}});
   render();
-  await demoWaitForClick('Amendments', 5, T,
+  await demoWaitForClick('Markup', 6, T,
     'Rep. Tlaib proposed an amendment to <strong>increase rural connectivity funding from $500M to $750M</strong>. The diff view shows the exact text change.');
   if (ab()) return;
 
-  // Step 6: Adopt the amendment
+  // Step 7: Adopt the amendment, report the bill
   Store.dispatch({ type: 'UPDATE_AMENDMENT_STATUS', payload: { billId, amendmentId: amendId, status: 'adopted' } });
+  Store.dispatch({ type: 'UPDATE_BILL_STATUS', payload: { billId, status: 'house_floor' } });
   render();
-  await demoWaitForClick('Amendments', 6, T,
-    'The amendment was <strong>adopted</strong> and the bill text updated — an auditable revision history on the Record itself, in contrast to today\'s U.S. Code, which doesn\'t even include appropriations acts.');
+  await demoWaitForClick('Reported', 7, T,
+    'The amendment was <strong>adopted in markup</strong> and the committee <strong>reported the bill to the House floor</strong>. The updated text carries an auditable revision history on the Record itself — in contrast to today\'s U.S. Code, which doesn\'t even include appropriations acts.');
   if (ab()) return;
 
-  // Step 7: Move to vote tab
+  // Step 8: Move to vote tab
   formState.activeTab = 'vote';
   render();
-  await demoWaitForClick('Voting', 7, T,
-    'On to the <strong>Vote tab</strong>. Passage requires a <strong>majority of Members present and voting</strong> in each chamber (218/51 only if every seat votes). Under the NDFR these floor votes are literally <strong>Budget Key signatures</strong> editing the Fiscal Record. Let\'s simulate the House.');
+  await demoWaitForClick('Voting', 8, T,
+    'On to the <strong>floor</strong>. Passage requires a <strong>majority of Members present and voting</strong> in each chamber (218/51 only if every seat votes). Under the NDFR these floor votes are literally <strong>Budget Key signatures</strong> editing the Fiscal Record. Let\'s simulate the House.');
   if (ab()) return;
 
-  // Step 8: Simulate House vote
-  updateDemoBar('House Vote', 8, T, 'Simulating <strong>House of Representatives vote</strong>... Watch the tally bar fill in real time. A majority of those voting is needed.', true);
+  // Step 9: Simulate House vote
+  updateDemoBar('House Vote', 9, T, 'Simulating <strong>House of Representatives vote</strong>... Watch the tally bar fill in real time. A majority of those voting is needed.', true);
   Store.dispatch({ type: 'UPDATE_BILL_STATUS', payload: { billId, status: 'house_voting' } });
   await demoWait(100);
   startVoteAnimation('house', billId, false);
@@ -2012,12 +2087,20 @@ async function startGuidedDemo() {
   render();
 
   const houseResult = Store.getState().bills.find(b => b.id === billId).votes.houseCount;
-  await demoWaitForClick('House Vote', 9, T,
-    `The House voted <strong>${houseResult.yea} yea to ${houseResult.nay} nay</strong> — a majority of the ${houseResult.yea + houseResult.nay} Members voting. The bill <strong>passed the House</strong>. Now the Senate.`);
+  await demoWaitForClick('House Vote', 10, T,
+    `The House voted <strong>${houseResult.yea} yea to ${houseResult.nay} nay</strong> — a majority of the ${houseResult.yea + houseResult.nay} Members voting. The bill <strong>passed the House</strong>. Now the Senate — but debate must end first.`);
   if (ab()) return;
 
-  // Step 10: Simulate Senate vote
-  updateDemoBar('Senate Vote', 10, T, 'Simulating <strong>United States Senate vote</strong>... majority of those voting needed (the VP breaks ties).', true);
+  // Step 11: Cloture
+  Store.dispatch({ type: 'UPDATE_VOTES', payload: { billId, votes: { cloture: { yea: 62, nay: 38, invoked: true } } } });
+  Store.dispatch({ type: 'UPDATE_BILL_STATUS', payload: { billId, status: 'senate_floor' } });
+  render();
+  await demoWaitForClick('Cloture', 11, T,
+    'The Senate first <strong>invoked cloture 62&ndash;38</strong> — under Rule XXII most measures need <strong>60 votes</strong> to end debate before they can even get a passage vote. Budget <em>reconciliation</em> bills bypass this (with the Byrd Rule policing them); the NDFR would flip the default entirely, making budgetary law majority-vote business.');
+  if (ab()) return;
+
+  // Step 12: Simulate Senate vote
+  updateDemoBar('Senate Vote', 12, T, 'Simulating <strong>United States Senate vote</strong>... majority of those voting needed (the VP breaks ties).', true);
   Store.dispatch({ type: 'UPDATE_BILL_STATUS', payload: { billId, status: 'senate_voting' } });
   await demoWait(100);
   startVoteAnimation('senate', billId, false);
@@ -2027,27 +2110,27 @@ async function startGuidedDemo() {
   render();
 
   const senateResult = Store.getState().bills.find(b => b.id === billId).votes.senateCount;
-  await demoWaitForClick('Senate Vote', 11, T,
-    `The Senate voted <strong>${senateResult.yea} yea to ${senateResult.nay} nay</strong>. <strong>Passed!</strong> (In today\'s Senate most bills first need 60 votes for cloture; the NDFR treats budgetary law as the majority-vote <em>default</em>, flipping the filibuster/Byrd-rule presumption.)`);
+  await demoWaitForClick('Senate Vote', 13, T,
+    `The Senate voted <strong>${senateResult.yea} yea to ${senateResult.nay} nay</strong>. <strong>Passed!</strong> The Senate acted on the identical House-passed text — had it amended the bill, a conference or amendment exchange would be needed before presentment.`);
   if (ab()) return;
 
-  // Step 12: Presidential VETO (longest path)
+  // Step 14: Presidential VETO (longest path)
   Store.dispatch({ type: 'UPDATE_BILL_STATUS', payload: { billId, status: 'presidential_review' } });
   render();
-  await demoWaitForClick('Presidential', 12, T,
-    'Now <strong>Presidential Review</strong>. The NDFR\'s two-tier edit rule mirrors Art. I, &sect; 7: a Fiscal Record edit takes effect with <strong>bare majorities plus the President\'s signature</strong> (or his 10-day silence), or with <strong>two-thirds of both houses</strong> over his veto. To show the longest path, the President will <strong>veto</strong>.');
+  await demoWaitForClick('Presidential', 14, T,
+    'Now <strong>Presidential Review</strong>. The NDFR\'s two-tier edit rule mirrors Art. I, &sect; 7: a Fiscal Record edit takes effect with <strong>bare majorities plus the President\'s signature</strong> (or his 10-day silence while Congress sits), or with <strong>two-thirds of both houses</strong> over his veto. To show the longest path, the President will <strong>veto</strong>.');
   if (ab()) return;
 
-  // Step 13: Execute veto
+  // Step 15: Execute veto
   Store.dispatch({ type: 'UPDATE_VOTES', payload: { billId, votes: { presidentialAction: 'vetoed' } } });
   Store.dispatch({ type: 'UPDATE_BILL_STATUS', payload: { billId, status: 'vetoed' } });
   render();
-  await demoWaitForClick('Veto', 13, T,
+  await demoWaitForClick('Veto', 15, T,
     '<strong>The President has vetoed the bill.</strong> Congress can override with <strong>two-thirds of Members present and voting</strong> in each chamber — the constitutional supermajority that lets the legislature act unilaterally.');
   if (ab()) return;
 
-  // Step 14: House override vote
-  updateDemoBar('Override (House)', 14, T, 'Simulating <strong>House veto override vote</strong>... 2/3 of Members present and voting needed.', true);
+  // Step 16: House override vote
+  updateDemoBar('Override (House)', 16, T, 'Simulating <strong>House veto override vote</strong>... 2/3 of Members present and voting needed.', true);
   Store.dispatch({ type: 'UPDATE_BILL_STATUS', payload: { billId, status: 'veto_override_house' } });
   await demoWait(100);
   startVoteAnimation('house', billId, true);
@@ -2057,12 +2140,12 @@ async function startGuidedDemo() {
   render();
 
   const hOverride = Store.getState().bills.find(b => b.id === billId).votes.vetoOverrideHouse;
-  await demoWaitForClick('Override (House)', 15, T,
+  await demoWaitForClick('Override (House)', 17, T,
     `House override vote: <strong>${hOverride.yea} yea to ${hOverride.nay} nay</strong> — ${overrideThreshold(hOverride)} of the ${hOverride.yea + hOverride.nay} voting were needed, so the House override <strong>${overridePassed(hOverride) ? 'succeeded' : 'failed'}</strong>. Now the Senate.`);
   if (ab()) return;
 
-  // Step 16: Senate override vote
-  updateDemoBar('Override (Senate)', 16, T, 'Simulating <strong>Senate veto override vote</strong>... 2/3 of Members present and voting needed.', true);
+  // Step 18: Senate override vote
+  updateDemoBar('Override (Senate)', 18, T, 'Simulating <strong>Senate veto override vote</strong>... 2/3 of Members present and voting needed.', true);
   Store.dispatch({ type: 'UPDATE_BILL_STATUS', payload: { billId, status: 'veto_override_senate' } });
   await demoWait(100);
   startVoteAnimation('senate', billId, true);
@@ -2076,11 +2159,11 @@ async function startGuidedDemo() {
   if (overridden) {
     Store.dispatch({ type: 'ENACT_BILL', payload: { billId } });
     render();
-    await demoWaitForClick('Enacted', 17, T,
+    await demoWaitForClick('Enacted', 19, T,
       '<strong>Veto overridden — the bill is enacted.</strong> Its Public Credit lines are now live entries on the Congressional Fiscal Record. Crucially, <strong>no money has moved</strong>: enactment delegates spending <em>power</em>. Dollars only come into existence in phase 3, at the ATM.');
   } else {
     // Override failed — enact via alternate path so the demo can continue
-    await demoWaitForClick('Override Failed', 17, T,
+    await demoWaitForClick('Override Failed', 19, T,
       'The override didn\'t reach 2/3 of those voting in both chambers. For demo purposes we\'ll <strong>enact the bill directly</strong> so we can continue. (Remember: enactment records credit lines — it moves no money.)');
     Store.dispatch({ type: 'ENACT_BILL', payload: { billId } });
     render();
@@ -2090,22 +2173,22 @@ async function startGuidedDemo() {
   // ===== PHASE 2: DRAWING (Public Credit Card issuance) =====
   Store.dispatch({ type: 'SET_VIEW', payload: 'cards' });
   render();
-  await demoWaitForClick('Drawing', 18, T,
-    '<strong>Phase 2: Drawing.</strong> DOT still can\'t touch the ATM — it must first obtain a <strong>Public Credit Card</strong> (its "Purse Key"). Congress\'s committees and legislative-branch organs (GAO, CBO, Library of Congress) negotiate the Card\'s Terms &amp; Conditions with the agency under the <strong>ATM Access Protocol</strong>. This is Congress reabsorbing the role OMB apportionment plays today.');
+  await demoWaitForClick('Drawing', 20, T,
+    '<strong>Phase 2: Drawing.</strong> DOT still can\'t touch the ATM — it must first obtain a <strong>Public Credit Card</strong> (its "Purse Key"). Congress\'s committees and legislative-branch organs (GAO, CBO, Library of Congress) negotiate the Card\'s Terms &amp; Conditions with the agency under the <strong>ATM Access Protocol</strong>. This is Congress reabsorbing the role OMB apportionment (31 U.S.C. 1512&ndash;1513, the SF-132 process) plays today.');
   if (ab()) return;
 
-  // Step 19: Select the DOT credit line
+  // Step 21: Select the DOT credit line
   const enactedBill = Store.getState().bills.find(b => b.id === billId);
   const lineToCard = enactedBill ? enactedBill.creditLines[0] : null;
   if (lineToCard) {
     formState.card = { subcategories: [], committeeName: '', requiredSigs: 2, signatories: [], complianceResult: null, visible: false };
     Store.dispatch({ type: 'SELECT_LINE', payload: lineToCard.id });
   }
-  await demoWaitForClick('Drawing', 19, T,
+  await demoWaitForClick('Drawing', 21, T,
     'We\'ve selected the <strong>DOT $5B credit line</strong>. The panel shows the statutory terms from the Fiscal Record — cap, period of availability, categories, restrictions. Now Congress compiles these into executable Card Terms &amp; Conditions.');
   if (ab()) return;
 
-  // Step 20: Negotiate Terms & Conditions
+  // Step 22: Negotiate Terms & Conditions
   formState.card.committeeName = 'Joint Committee on the Fiscal Record (GAO/CBO support)';
   formState.card.requiredSigs = 2;
   formState.card.subcategories = [
@@ -2116,29 +2199,29 @@ async function startGuidedDemo() {
     { id: 'sc-d5', label: 'Port & Freight Infrastructure', parentCategory: null, quantitativeCap: 5e8, qualitativeRules: ['Coastal and inland waterway ports', 'Supply chain resilience focus'] }
   ];
   render();
-  await demoWaitForClick('Terms & Conditions', 20, T,
+  await demoWaitForClick('Terms & Conditions', 22, T,
     'The Card\'s <strong>Terms &amp; Conditions</strong> define 5 executable subcategories totaling $5B: Interstate Bridge Repair ($1.5B), Urban Transit ($1.2B), High-Speed Rail ($1B), Rural Road &amp; Broadband ($800M), Ports ($500M). Unlike today\'s committee report language, these terms <strong>bind spending at the software layer</strong>.');
   if (ab()) return;
 
-  // Step 21: Issuance signatures
+  // Step 23: Issuance signatures
   formState.card.signatories = ['Sen. Patty Murray, Chair, Joint Committee on the Fiscal Record (Budget Key)', 'Gene Dodaro, Comptroller General, GAO (issuance co-sign)'];
   render();
-  await demoWaitForClick('Budget Keys', 21, T,
+  await demoWaitForClick('Budget Keys', 23, T,
     'Issuance is signed with legislative <strong>Budget Keys</strong>: the committee chair plus a supporting legislative-branch organ (GAO). The Card is <strong>issued and administered by Congress alone</strong> — DOT merely countersigns to accept the negotiated Terms &amp; Conditions, after the formalized inter-branch negotiation the paper describes.');
   if (ab()) return;
 
-  // Step 22: Run a FAILING protocol check
+  // Step 24: Run a FAILING protocol check
   const origSubs = JSON.parse(JSON.stringify(formState.card.subcategories));
   formState.card.subcategories[0].quantitativeCap = 3e9; // bump to make it exceed
   if (lineToCard) {
     formState.card.complianceResult = checkCardTermsCompliance(formState.card.subcategories, lineToCard);
   }
   render();
-  await demoWaitForClick('Protocol Check', 22, T,
+  await demoWaitForClick('Protocol Check', 24, T,
     'We intentionally set Bridge Repair to <strong>$3B</strong>, pushing the T&amp;C total to <strong>$6.5B</strong> — beyond the $5B statutory line. The <strong>ATM Access Protocol check</strong> catches the violation and blocks issuance: the Card can never delegate more than the Record grants.');
   if (ab()) return;
 
-  // Step 23: Fix and issue the Card
+  // Step 25: Fix and issue the Card
   formState.card.subcategories = origSubs;
   if (lineToCard) {
     formState.card.complianceResult = checkCardTermsCompliance(formState.card.subcategories, lineToCard);
@@ -2154,7 +2237,7 @@ async function startGuidedDemo() {
   Store.dispatch({ type: 'ISSUE_CARD', payload: cardPayload });
   formState.card = { subcategories: [], committeeName: '', requiredSigs: 1, signatories: [], complianceResult: null, visible: false };
   render();
-  await demoWaitForClick('Card Issued', 23, T,
+  await demoWaitForClick('Card Issued', 25, T,
     'With compliant amounts, the <strong>Public Credit Card is issued</strong>. DOT now holds an activated Purse Key whose Terms &amp; Conditions travel with every future draw and spend. On to the ATM.');
   if (ab()) return;
 
@@ -2162,11 +2245,11 @@ async function startGuidedDemo() {
   Store.dispatch({ type: 'SET_VIEW', payload: 'agency' });
   Store.dispatch({ type: 'SELECT_AGENCY', payload: 'dot' });
   render();
-  await demoWaitForClick('Coining', 24, T,
-    '<strong>Phase 3: Coining.</strong> This is DOT\'s dashboard: its <strong>ePurse</strong> (a locally hosted hardware wallet) holds <strong>$0</strong> — the $5B credit line is power, not money. Drawing at <strong>Congress\'s Treasury ATM</strong> creates brand-new eCoins <em>de novo</em>, loaded onto the ePurse, 24/7, with no Treasury or Federal Reserve intermediation and no bond issuance. With a valid Card, draws are granted by default.');
+  await demoWaitForClick('Coining', 26, T,
+    '<strong>Phase 3: Coining.</strong> This is DOT\'s dashboard: its <strong>ePurse</strong> (a locally hosted hardware wallet) holds <strong>$0</strong> — the $5B credit line is power, not money. Today this step would be an appropriation warrant (31 U.S.C. 3323), a CARS account, an OMB apportionment, and a BFS disbursement pipeline; under the NDFR, drawing at <strong>Congress\'s Treasury ATM</strong> creates brand-new eCoins <em>de novo</em>, 24/7, with no bond issuance. With a valid Card, draws are granted by default.');
   if (ab()) return;
 
-  // Step 25: First draw — approved
+  // Step 27: First draw — approved
   const dotLineId = lineToCard ? lineToCard.id : null;
   function demoTx(fields) {
     return Object.assign({ id: 'tx-demo-' + uid(), agencyId: 'dot', creditLineId: dotLineId,
@@ -2198,18 +2281,18 @@ async function startGuidedDemo() {
     runDemoDraw(1e9, 'Initial eCoin draw for FY26 obligations');
     render();
   }
-  await demoWaitForClick('ATM Draw', 25, T,
+  await demoWaitForClick('ATM Draw', 27, T,
     '<strong>Draw approved: $1B in new eCoins</strong> now sit on DOT\'s ePurse. The ATM verified the Card, the handbrake status, the period of availability, and the cumulative cap. Government-wide <strong>outstanding eCoins just grew by $1B</strong> — deficits are money-financed by design under the NDFR.');
   if (ab()) return;
 
-  // Step 26: Excessive draw — rejected
+  // Step 28: Excessive draw — rejected
   let d2 = null;
   if (dotLineId) {
     d2 = runDemoDraw(6e9, 'Attempted draw beyond the credit line');
     formState.expandedTxId = d2.id;
     render();
   }
-  await demoWaitForClick('ATM Draw', 26, T,
+  await demoWaitForClick('ATM Draw', 28, T,
     '<strong>Draw REJECTED: $6B</strong> — cumulative draws would exceed the $5B credit line. The quantitative cap is enforced in the ATM\'s software, not by an OMB apportionment memo or a Treasury official\'s discretion.');
   if (ab()) return;
 
@@ -2221,33 +2304,33 @@ async function startGuidedDemo() {
     Store.dispatch({ type: 'MARK_OUTLAID', payload: { txId: ob1.id } });
     render();
   }
-  await demoWaitForClick('Spending', 27, T,
+  await demoWaitForClick('Spending', 29, T,
     '<strong>Phase 4: Spending — two distinct steps.</strong> DOT first <strong>obligated $250M</strong> (contract award, checked against budget authority and the Card\'s "Interstate Bridge Repair" terms), then <strong>paid</strong> it — an outlay of eCoins from the ePurse into circulation. Balance: <strong>$750M</strong>.');
   if (ab()) return;
 
-  // Step 28: Off-purpose obligation — rejected
+  // Step 30: Off-purpose obligation — rejected
   let ob2 = null;
   if (dotLineId) {
     ob2 = runDemoObligation(50e6, 'Military Equipment', 'Armored vehicle procurement');
     formState.expandedTxId = ob2.id;
     render();
   }
-  await demoWaitForClick('Spending', 28, T,
+  await demoWaitForClick('Spending', 30, T,
     '<strong>Obligation REJECTED: $50M</strong> for "Military Equipment" — not a purpose on the Card\'s Terms &amp; Conditions. This is the <strong>purpose statute</strong> (31 U.S.C. 1301(a)) as executable code: appropriations may only be applied to their objects.');
   if (ab()) return;
 
-  // Step 29: Over-cap obligation — rejected
+  // Step 31: Over-cap obligation — rejected
   let ob3 = null;
   if (dotLineId) {
     ob3 = runDemoObligation(2e9, 'Urban Transit Modernization', 'Nationwide transit modernization mega-award');
     formState.expandedTxId = ob3.id;
     render();
   }
-  await demoWaitForClick('Spending', 29, T,
+  await demoWaitForClick('Spending', 31, T,
     '<strong>Obligation REJECTED: $2B</strong> against the $1.2B "Urban Transit Modernization" subcategory cap. Note what the engine checks: <strong>budget authority</strong>, not cash on hand — the Antideficiency Act (31 U.S.C. 1341) bars <em>obligations</em> in excess of the appropriation, before any payment happens.');
   if (ab()) return;
 
-  // Step 30: Valid obligation, payment blocked by liquidity
+  // Step 32: Valid obligation, payment blocked by liquidity
   let ob4 = null;
   if (dotLineId) {
     ob4 = runDemoObligation(1e9, 'High-Speed Rail Corridors', 'NEC high-speed rail corridor grant');
@@ -2255,51 +2338,51 @@ async function startGuidedDemo() {
     formState.expandedTxId = null;
     render();
   }
-  await demoWaitForClick('Spending', 30, T,
+  await demoWaitForClick('Spending', 32, T,
     'Now the reverse case: a <strong>$1B rail obligation is APPROVED</strong> — well within budget authority — but the <strong>payment is BLOCKED</strong>: DOT holds only $750M in eCoins. Authority to spend and money to pay with are <strong>separate things</strong>: credit lines cap obligations; the ePurse funds outlays. (See the payment note on the ledger row.)');
   if (ab()) return;
 
-  // Step 31: Draw more, then pay
+  // Step 33: Draw more, then pay
   if (dotLineId) {
     runDemoDraw(5e8, 'Supplemental draw to fund rail outlay');
     if (ob4) Store.dispatch({ type: 'MARK_OUTLAID', payload: { txId: ob4.id } });
     render();
   }
-  await demoWaitForClick('Spending', 31, T,
+  await demoWaitForClick('Spending', 33, T,
     'DOT drew <strong>$500M more at the ATM</strong> (instant, 24/7 — no debt auction, no apportionment memo) and the <strong>$1B rail payment cleared</strong>. ePurse balance: $250M. Cumulative draws: $1.5B of the $5B line.');
   if (ab()) return;
 
-  // Step 32: Ledger review
+  // Step 34: Ledger review
   formState.expandedTxId = null;
   render();
-  await demoWaitForClick('Ledger Node', 32, T,
+  await demoWaitForClick('Ledger Node', 34, T,
     'DOT\'s <strong>ledger node</strong> records every draw, obligation, outlay — approved or rejected — with the compliance findings attached. Click any row for details. This local node is DOT\'s slice of the <strong>Federated Federal Ledger</strong>.');
   if (ab()) return;
 
   // ===== PHASE 5: PUBLISHING =====
   Store.dispatch({ type: 'SET_VIEW', payload: 'record' });
   render();
-  await demoWaitForClick('Publishing', 33, T,
+  await demoWaitForClick('Publishing', 35, T,
     '<strong>Phase 5: Publishing.</strong> Agency nodes sync automatically to Congress\'s super-node: the <strong>Public Statement and Account</strong> (Art. I, &sect; 9, cl. 7, as a live dashboard). Read the aggregates: appropriated, drawn, held, obligated, outlaid, collected, outstanding. Budgetary obfuscation gets structurally harder.');
   if (ab()) return;
 
-  // Step 34: Financing handbrake — freeze
+  // Step 36: Financing handbrake — freeze
   if (dotLineId) Store.dispatch({ type: 'SET_LINE_FROZEN', payload: { lineId: dotLineId, frozen: true } });
   render();
-  await demoWaitForClick('Handbrake', 34, T,
+  await demoWaitForClick('Handbrake', 36, T,
     'Congress just passed a Joint Resolution activating the <strong>financing handbrake</strong> on DOT\'s line — the NDFR\'s replacement for the debt ceiling. Instead of the Treasury Secretary running out of cash and dictating terms, <strong>only Congress</strong> can suspend new draws (subject to presidential veto and override) — per line, or government-wide at the ATM hardware layer. The parliamentary finger is on the button.');
   if (ab()) return;
 
-  // Step 35: Draw while frozen — rejected
+  // Step 37: Draw while frozen — rejected
   if (dotLineId) {
     runDemoDraw(5e8, 'Draw attempted during handbrake freeze');
     render();
   }
-  await demoWaitForClick('Handbrake', 35, T,
+  await demoWaitForClick('Handbrake', 37, T,
     'DOT tried to draw <strong>$500M</strong> during the freeze — <strong>REJECTED at the ATM</strong>. Note what is <em>not</em> affected: eCoins already on the ePurse remain spendable, and the freeze is a deliberate, attributable act of Congress rather than an executive-branch improvisation.');
   if (ab()) return;
 
-  // Step 36: Lift the freeze, record collections
+  // Step 38: Lift the freeze, record collections
   if (dotLineId) Store.dispatch({ type: 'SET_LINE_FROZEN', payload: { lineId: dotLineId, frozen: false } });
   Store.dispatch({ type: 'ADD_TRANSACTION', payload: {
     id: 'tx-demo-collect', type: 'collect', agencyId: null, creditLineId: null,
@@ -2308,22 +2391,19 @@ async function startGuidedDemo() {
     complianceCheck: { passed: true, violations: [], checkedAgainst: ['Receipts deposited to the Record, not to any ePurse (Miscellaneous Receipts analogue, 31 U.S.C. 3302(b))', 'Redeemed eCoins deleted from outstanding'] }
   }});
   render();
-  await demoWaitForClick('Collections', 36, T,
+  await demoWaitForClick('Collections', 38, T,
     'Freeze lifted, and <strong>$300M in tax receipts</strong> just arrived. Under the NDFR taxes don\'t "fund" spending — collected eCoins are <strong>deleted</strong>, shrinking outstanding money (and receipts flow to the Record, never into an agency\'s ePurse — the Miscellaneous Receipts principle). Watch <strong>Collected</strong> and <strong>Outstanding</strong> move: draws create, taxes delete.');
   if (ab()) return;
 
-  // Step 37: Second bill
-  Store.dispatch({ type: 'SET_VIEW', payload: 'legislative' });
-  Store.dispatch({ type: 'SELECT_BILL', payload: 'bill-002' });
-  formState.activeTab = 'authorizations';
+  // Step 39: Today vs NDFR
   render();
-  await demoWaitForClick('Second Bill', 37, T,
-    'Back on the Record: the <strong>Public Health Emergency Preparedness Act</strong> appropriates credit lines for HHS ($5B) and EPA ($2.5B). Each line gets its own Card, draws, and ledger trail — agencies\' fiscal affairs stay decentralized while Congress keeps the consolidated books.');
+  await demoWaitForClick('Today vs NDFR', 39, T,
+    'Scroll down to the <strong>"How This Works Today vs. Under the NDFR"</strong> table: it maps every stage you just walked to the real machinery it replaces — appropriation warrants and CARS accounts, OMB apportionment, BFS disbursement through the TGA at the Fed, Treasury auctions under the debt limit, and the Miscellaneous Receipts Act.');
   if (ab()) return;
 
-  // Step 38: Closing
-  await demoWaitForClick('Complete', 38, T,
-    '<strong>Demo complete!</strong> You walked the NDFR\'s five phases — <strong>Appropriating</strong> (credit lines on the Fiscal Record), <strong>Drawing</strong> (Public Credit Card issuance), <strong>Coining</strong> (eCoins created at Congress\'s Treasury ATM), <strong>Spending</strong> (obligation against budget authority, payment from the ePurse), and <strong>Publishing</strong> (the live Public Statement and Account) — plus the financing handbrake and tax-deletion mechanics. Explore freely.');
+  // Step 40: Closing
+  await demoWaitForClick('Complete', 40, T,
+    '<strong>Demo complete!</strong> You walked committee markup, cloture, and the NDFR\'s five phases — <strong>Appropriating</strong> (credit lines on the Fiscal Record), <strong>Drawing</strong> (Public Credit Card issuance), <strong>Coining</strong> (eCoins created at Congress\'s Treasury ATM), <strong>Spending</strong> (obligation against budget authority, payment from the ePurse), and <strong>Publishing</strong> (the live Public Statement and Account) — plus the financing handbrake and tax-deletion mechanics. Explore freely.');
   if (ab()) return;
 
   // Clean up
