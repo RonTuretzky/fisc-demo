@@ -1,0 +1,2513 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>The E-FISCAL Machine — Phase 1 Demo</title>
+<style>
+/* ========== RESET & VARIABLES ========== */
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+:root {
+  --navy-900: #0f172a; --navy-800: #1e293b; --navy-700: #334155;
+  --slate-50: #f8fafc; --slate-100: #f1f5f9; --slate-200: #e2e8f0;
+  --slate-300: #cbd5e1; --slate-400: #94a3b8; --slate-500: #64748b;
+  --slate-600: #475569; --slate-700: #334155; --slate-800: #1e293b;
+  --gray-950: #030712;
+  --blue-50: #eff6ff; --blue-100: #dbeafe; --blue-500: #3b82f6; --blue-600: #2563eb; --blue-700: #1d4ed8;
+  --green-50: #f0fdf4; --green-100: #dcfce7; --green-500: #22c55e; --green-600: #16a34a; --green-700: #15803d;
+  --red-50: #fef2f2; --red-100: #fee2e2; --red-500: #ef4444; --red-600: #dc2626; --red-700: #b91c1c;
+  --amber-50: #fffbeb; --amber-100: #fef3c7; --amber-500: #f59e0b; --amber-600: #d97706;
+  --orange-500: #f97316; --orange-600: #ea580c;
+  --purple-50: #faf5ff; --purple-100: #f3e8ff; --purple-500: #a855f7; --purple-600: #7c3aed;
+  --emerald-500: #10b981; --emerald-600: #059669;
+  --font-sans: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', sans-serif;
+  --font-mono: 'SF Mono', SFMono-Regular, Consolas, 'Liberation Mono', Menlo, monospace;
+  --shadow-sm: 0 1px 2px 0 rgb(0 0 0 / 0.05);
+  --shadow: 0 1px 3px 0 rgb(0 0 0 / 0.1), 0 1px 2px -1px rgb(0 0 0 / 0.1);
+  --radius: 8px; --radius-sm: 4px; --radius-lg: 12px;
+}
+html, body { height: 100%; font-family: var(--font-sans); background: var(--slate-100); color: var(--gray-950); font-size: 14px; line-height: 1.5; }
+button { font-family: inherit; font-size: inherit; cursor: pointer; border: none; background: none; }
+input, select, textarea { font-family: inherit; font-size: inherit; }
+a { color: var(--blue-600); text-decoration: none; }
+
+/* ========== HEADER ========== */
+.header { position: fixed; top: 0; left: 0; right: 0; height: 82px; background: var(--navy-900); z-index: 100; padding: 0 20px; }
+.header__row1 { display: flex; align-items: center; gap: 16px; height: 46px; }
+.header__brand { display: flex; align-items: center; gap: 10px; color: white; font-weight: 700; font-size: 15px; white-space: nowrap; }
+.header__actions { margin-left: auto; display: flex; gap: 8px; align-items: center; }
+.header__btn { padding: 5px 12px; border-radius: var(--radius-sm); font-size: 12px; font-weight: 500; color: var(--slate-300); border: 1px solid var(--navy-700); transition: all 0.15s; }
+.header__btn:hover { background: var(--navy-700); color: white; }
+.header__btn--danger { color: var(--red-500); }
+.header__btn--demo { background: var(--blue-600); color: white; border-color: var(--blue-600); }
+.header__btn--demo:hover { background: var(--blue-500); }
+.header__row2 { display: flex; align-items: center; gap: 2px; height: 36px; overflow-x: auto; }
+.header__group { font-size: 10px; font-weight: 700; letter-spacing: 0.08em; color: var(--slate-500); text-transform: uppercase; padding: 0 8px 0 4px; white-space: nowrap; }
+.header__tab { padding: 5px 12px; border-radius: var(--radius); color: var(--slate-300); font-weight: 500; font-size: 12.5px; transition: all 0.15s; white-space: nowrap; }
+.header__tab:hover { background: var(--navy-700); color: white; }
+.header__tab--active { background: var(--blue-600); color: white; }
+.header__divider { width: 1px; height: 18px; background: var(--navy-700); margin: 0 8px; flex-shrink: 0; }
+.clock-widget { display: flex; align-items: center; gap: 6px; background: var(--navy-800); border: 1px solid var(--navy-700); border-radius: var(--radius); padding: 3px 8px; }
+.clock-widget__time { font-family: var(--font-mono); font-size: 11.5px; color: var(--amber-500); white-space: nowrap; }
+.clock-widget__btn { padding: 2px 7px; border-radius: var(--radius-sm); font-size: 11px; color: var(--slate-300); border: 1px solid var(--navy-700); white-space: nowrap; }
+.clock-widget__btn:hover { background: var(--navy-700); color: white; }
+
+/* ========== LAYOUT ========== */
+.app-main { padding-top: 82px; min-height: 100vh; }
+.content-inner { max-width: 1060px; margin: 0 auto; padding: 24px; }
+.split-view { display: flex; min-height: calc(100vh - 82px); }
+.sidebar { width: 320px; border-right: 1px solid var(--slate-200); background: white; overflow-y: auto; flex-shrink: 0; }
+.content { flex: 1; overflow-y: auto; background: var(--slate-50); }
+.sidebar-header { padding: 14px 18px; border-bottom: 1px solid var(--slate-200); }
+.sidebar-header h2 { font-size: 14px; font-weight: 700; }
+.sidebar-item { padding: 11px 18px; border-bottom: 1px solid var(--slate-100); cursor: pointer; transition: background 0.1s; }
+.sidebar-item:hover { background: var(--slate-50); }
+.sidebar-item--selected { background: var(--blue-50); border-left: 3px solid var(--blue-600); }
+.sidebar-item__title { font-weight: 600; font-size: 13px; margin-bottom: 3px; }
+.sidebar-item__meta { font-size: 11.5px; color: var(--slate-500); }
+
+/* ========== BADGES ========== */
+.badge { display: inline-flex; align-items: center; padding: 2px 8px; border-radius: 9999px; font-size: 11px; font-weight: 600; white-space: nowrap; }
+.badge--blue { background: var(--blue-100); color: var(--blue-700); }
+.badge--green { background: var(--green-100); color: var(--green-700); }
+.badge--red { background: var(--red-100); color: var(--red-700); }
+.badge--amber { background: var(--amber-100); color: var(--amber-600); }
+.badge--purple { background: var(--purple-100); color: var(--purple-600); }
+.badge--slate { background: var(--slate-200); color: var(--slate-600); }
+.badge--orange { background: #fff7ed; color: var(--orange-600); }
+
+/* ========== CARDS ========== */
+.card { background: white; border: 1px solid var(--slate-200); border-radius: var(--radius-lg); padding: 20px; margin-bottom: 16px; }
+.card--flush { padding: 0; }
+.card__header { padding: 14px 20px; border-bottom: 1px solid var(--slate-200); display: flex; justify-content: space-between; align-items: center; gap: 10px; flex-wrap: wrap; }
+.card__header h3 { font-size: 14px; font-weight: 700; }
+.card__body { padding: 16px 20px; }
+.section-title { font-size: 12px; font-weight: 700; color: var(--slate-500); text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 10px; }
+
+/* ========== TABS ========== */
+.tabs { display: flex; border-bottom: 2px solid var(--slate-200); margin-bottom: 20px; }
+.tab { padding: 10px 20px; font-weight: 600; font-size: 13px; color: var(--slate-500); border-bottom: 2px solid transparent; margin-bottom: -2px; transition: all 0.15s; }
+.tab:hover { color: var(--slate-700); }
+.tab--active { color: var(--blue-600); border-bottom-color: var(--blue-600); }
+
+/* ========== FORMS & BUTTONS ========== */
+.form-group { margin-bottom: 12px; }
+.form-label { display: block; font-size: 12px; font-weight: 600; color: var(--slate-600); margin-bottom: 4px; }
+.form-input, .form-select, .form-textarea {
+  width: 100%; padding: 8px 12px; border: 1px solid var(--slate-300); border-radius: var(--radius-sm);
+  font-size: 13px; background: white; color: var(--gray-950);
+}
+.form-input:focus, .form-select:focus, .form-textarea:focus { outline: none; border-color: var(--blue-500); box-shadow: 0 0 0 3px rgba(59,130,246,0.1); }
+.form-row { display: flex; gap: 12px; }
+.form-row > * { flex: 1; }
+.btn { display: inline-flex; align-items: center; justify-content: center; gap: 6px; padding: 8px 16px; border-radius: var(--radius-sm); font-weight: 600; font-size: 13px; transition: all 0.15s; }
+.btn--primary { background: var(--blue-600); color: white; }
+.btn--primary:hover { background: var(--blue-700); }
+.btn--success { background: var(--green-600); color: white; }
+.btn--success:hover { background: var(--green-700); }
+.btn--danger { background: var(--red-600); color: white; }
+.btn--danger:hover { background: var(--red-700); }
+.btn--outline { border: 1px solid var(--slate-300); color: var(--slate-700); background: white; }
+.btn--outline:hover { background: var(--slate-50); }
+.btn--sm { padding: 5px 10px; font-size: 12px; }
+.btn--xs { padding: 3px 8px; font-size: 11px; }
+.btn:disabled { opacity: 0.5; cursor: not-allowed; }
+
+/* ========== TABLES ========== */
+.table-wrap { overflow-x: auto; }
+table { width: 100%; border-collapse: collapse; font-size: 13px; }
+thead th { text-align: left; padding: 9px 12px; font-weight: 600; font-size: 11.5px; color: var(--slate-500); text-transform: uppercase; letter-spacing: 0.03em; border-bottom: 2px solid var(--slate-200); background: var(--slate-50); }
+tbody td { padding: 9px 12px; border-bottom: 1px solid var(--slate-100); vertical-align: top; }
+tbody tr:hover { background: var(--slate-50); }
+tbody tr.expanded-row { background: var(--slate-50); }
+.text-right { text-align: right; }
+
+/* ========== ALERTS & MISC ========== */
+.alert { padding: 12px 16px; border-radius: var(--radius); margin-bottom: 16px; font-size: 13px; }
+.alert--success { background: var(--green-50); border: 1px solid var(--green-500); color: var(--green-700); }
+.alert--error { background: var(--red-50); border: 1px solid var(--red-500); color: var(--red-700); }
+.alert--warning { background: var(--amber-50); border: 1px solid var(--amber-500); color: var(--amber-600); }
+.alert--info { background: var(--blue-50); border: 1px solid var(--blue-500); color: var(--blue-700); }
+.alert ul { margin-left: 16px; margin-top: 4px; list-style: disc; }
+.text-sm { font-size: 12px; }
+.text-xs { font-size: 11px; }
+.text-muted { color: var(--slate-500); }
+.mt-2 { margin-top: 8px; } .mt-4 { margin-top: 16px; }
+.mb-2 { margin-bottom: 8px; } .mb-4 { margin-bottom: 16px; }
+.flex { display: flex; } .items-center { align-items: center; }
+.justify-between { justify-content: space-between; }
+.gap-2 { gap: 8px; } .gap-1 { gap: 4px; } .flex-wrap { flex-wrap: wrap; }
+.hidden { display: none !important; }
+pre.bill-text { font-family: var(--font-mono); font-size: 12px; line-height: 1.6; white-space: pre-wrap; background: var(--slate-50); padding: 16px; border-radius: var(--radius); border: 1px solid var(--slate-200); max-height: 340px; overflow-y: auto; }
+pre.recipe { font-family: var(--font-mono); font-size: 11.5px; line-height: 1.55; white-space: pre-wrap; background: var(--navy-900); color: var(--slate-200); padding: 14px; border-radius: var(--radius); }
+.stat-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; margin-bottom: 16px; }
+.stat-grid .card { padding: 14px; margin-bottom: 0; }
+@media (max-width: 900px) { .stat-grid { grid-template-columns: repeat(2, 1fr); } }
+.grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+.grid-3 { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 14px; }
+@media (max-width: 900px) { .grid-2, .grid-3 { grid-template-columns: 1fr; } }
+
+/* ========== FIELD RENDERING (mechanical vs judgment) ========== */
+.field-row { display: flex; gap: 8px; padding: 6px 10px; border-radius: var(--radius-sm); margin-bottom: 4px; font-size: 12.5px; align-items: baseline; }
+.field-row--mech { background: var(--green-50); border-left: 3px solid var(--green-500); }
+.field-row--judg { background: var(--amber-50); border-left: 3px solid var(--amber-500); }
+.field-row__label { font-weight: 700; font-size: 11px; text-transform: uppercase; letter-spacing: 0.04em; color: var(--slate-600); min-width: 130px; }
+.field-row__value { font-family: var(--font-mono); font-size: 12px; }
+.draft-banner { background: var(--amber-50); border: 1px dashed var(--amber-500); color: var(--amber-600); font-size: 12px; padding: 8px 12px; border-radius: var(--radius); margin-bottom: 14px; }
+.fingerprint { font-family: var(--font-mono); font-size: 11.5px; background: var(--navy-900); color: var(--amber-500); padding: 8px 12px; border-radius: var(--radius); display: inline-block; }
+.stamp { display: inline-block; border: 2px solid var(--red-600); color: var(--red-600); font-weight: 800; letter-spacing: 0.12em; padding: 2px 10px; border-radius: 4px; transform: rotate(-3deg); font-size: 12px; }
+
+/* ========== RAIL DIAGRAM ========== */
+.rail-flow { margin: 8px 0; }
+.rail-step { background: var(--blue-50); border: 1px solid rgba(37,99,235,0.25); border-radius: 10px; padding: 10px 14px; margin: 6px 0; font-size: 12.5px; line-height: 1.5; }
+.rail-step--active { border-color: var(--blue-600); box-shadow: 0 0 0 2px rgba(37,99,235,0.15); }
+.rail-step .step-n { display: inline-block; background: var(--navy-900); color: var(--amber-500); font-weight: bold; border-radius: 50%; width: 22px; height: 22px; text-align: center; line-height: 22px; margin-right: 8px; font-size: 11px; font-family: var(--font-sans); }
+.rail-split { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin: 6px 0; }
+.rail-a { background: var(--blue-50); border: 1px solid rgba(37,99,235,0.3); border-radius: 10px; padding: 10px 14px; font-size: 12.5px; }
+.rail-b { background: var(--amber-50); border: 1px solid rgba(245,158,11,0.4); border-radius: 10px; padding: 10px 14px; font-size: 12.5px; }
+.rail-arrow { text-align: center; color: var(--amber-600); font-size: 12px; margin: 0; }
+
+/* ========== CHECK TESTS ========== */
+.check-test { display: flex; gap: 8px; padding: 5px 10px; font-size: 12.5px; align-items: baseline; border-bottom: 1px solid var(--slate-100); }
+.check-test__icon { font-weight: 800; width: 18px; }
+.check-test--pass .check-test__icon { color: var(--green-600); }
+.check-test--fail .check-test__icon { color: var(--red-600); }
+
+/* ========== CHAIN BREADCRUMB ========== */
+.chain { display: flex; flex-wrap: wrap; gap: 4px; align-items: center; font-size: 12px; margin: 8px 0; }
+.chain__node { background: var(--slate-100); border: 1px solid var(--slate-300); border-radius: 6px; padding: 3px 8px; font-family: var(--font-mono); font-size: 11px; }
+.chain__sep { color: var(--slate-400); }
+
+/* ========== TALLY / STEPPER (vote machinery) ========== */
+.tally { margin-bottom: 16px; }
+.tally__counts { display: flex; gap: 16px; font-size: 12px; margin-bottom: 6px; }
+.tally__counts span { font-weight: 600; }
+.tally__bar { height: 28px; background: var(--slate-200); border-radius: var(--radius-sm); overflow: hidden; display: flex; position: relative; }
+.tally__yea { background: var(--green-500); height: 100%; transition: width 0.05s linear; }
+.tally__nay { background: var(--red-500); height: 100%; transition: width 0.05s linear; }
+.tally__other { background: var(--slate-300); height: 100%; transition: width 0.05s linear; }
+.tally__threshold { position: absolute; top: 0; bottom: 0; width: 2px; background: var(--gray-950); z-index: 2; }
+.tally__threshold-label { position: absolute; top: -18px; transform: translateX(-50%); font-size: 10px; font-weight: 700; color: var(--slate-600); }
+.stepper { display: flex; align-items: center; justify-content: center; margin-bottom: 24px; padding: 16px 0 6px; }
+.stepper__circle { width: 30px; height: 30px; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-size: 12px; font-weight: 700; border: 2px solid var(--slate-300); color: var(--slate-400); background: white; flex-shrink: 0; }
+.stepper__circle--active { border-color: var(--blue-600); color: var(--blue-600); background: var(--blue-50); }
+.stepper__circle--done { border-color: var(--green-600); color: white; background: var(--green-600); }
+.stepper__circle--failed { border-color: var(--red-600); color: white; background: var(--red-600); }
+.stepper__text { font-size: 10.5px; font-weight: 600; color: var(--slate-400); margin-top: 4px; text-align: center; max-width: 78px; }
+.stepper__text--active { color: var(--blue-600); }
+.stepper__text--done { color: var(--green-600); }
+.stepper__text--failed { color: var(--red-600); }
+.stepper__line { width: 44px; height: 2px; background: var(--slate-300); margin: 0 4px; flex-shrink: 0; }
+.stepper__line--done { background: var(--green-600); }
+.stepper__node { display: flex; flex-direction: column; align-items: center; }
+
+/* ========== DEMO MODE ========== */
+.demo-bar { position: fixed; bottom: 0; left: 0; right: 0; z-index: 200; background: var(--navy-900); color: white; box-shadow: 0 -4px 20px rgba(0,0,0,0.25); }
+.demo-bar__inner { max-width: 1000px; margin: 0 auto; padding: 14px 24px; display: flex; align-items: center; gap: 16px; }
+.demo-bar__step { font-size: 11px; font-weight: 700; color: var(--blue-500); text-transform: uppercase; letter-spacing: 0.08em; white-space: nowrap; min-width: 88px; }
+.demo-bar__text { flex: 1; font-size: 13.5px; line-height: 1.5; }
+.demo-bar__text strong { color: var(--amber-500); }
+.demo-bar__actions { display: flex; gap: 8px; flex-shrink: 0; }
+.demo-bar__btn { padding: 8px 18px; border-radius: var(--radius-sm); font-weight: 600; font-size: 13px; }
+.demo-bar__btn--next { background: var(--blue-600); color: white; }
+.demo-bar__btn--next:hover { background: var(--blue-500); }
+.demo-bar__btn--skip { color: var(--slate-400); border: 1px solid var(--slate-600); }
+.demo-bar__btn--skip:hover { color: white; border-color: var(--slate-400); }
+.demo-bar__progress { position: absolute; top: 0; left: 0; height: 3px; background: var(--blue-500); transition: width 0.4s ease; }
+body.demo-active .app-main { padding-bottom: 90px; }
+#smoke-results { position: fixed; inset: 90px 20px 20px; background: white; border: 2px solid var(--navy-900); border-radius: 8px; padding: 16px; overflow: auto; z-index: 300; font-size: 12px; }
+</style>
+</head>
+<body>
+<div id="app"></div>
+<script>
+/* =====================================================================
+   THE E-FISCAL MACHINE — Phase 1 demo
+   A toy model of the E-FISCAL Act (discussion draft, July 2026):
+   Phase 1, Part A (the Journal, the Ledger, the Protocol, the Account)
+   and Part B (the legislative-branch pilot; one payment on two rails).
+   Architectural rule: the JOURNAL is the single source of truth. The
+   Ledger is a pure function of it — "the published recipe."
+   ===================================================================== */
+
+/* ========== FORMAT UTILITIES ========== */
+function formatCurrency(amount) {
+  if (amount === null || amount === undefined) return 'N/A';
+  const abs = Math.abs(amount);
+  if (abs >= 1e9) return '$' + (amount / 1e9).toFixed(2) + 'B';
+  if (abs >= 1e6) return '$' + (amount / 1e6).toFixed(2) + 'M';
+  if (abs >= 1e3) return '$' + (amount / 1e3).toFixed(1) + 'K';
+  return '$' + amount.toFixed(0);
+}
+function formatExact(amount) { return '$' + Number(amount).toLocaleString('en-US'); }
+function formatDate(d) {
+  if (!d) return '';
+  const dt = new Date(d);
+  return dt.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
+}
+function formatDateTime(d) {
+  if (!d) return '';
+  const dt = new Date(d);
+  return dt.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' }) + ' ' +
+    dt.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', hour12: false, timeZone: 'UTC' }) + ' (sim)';
+}
+function uid() { return Date.now().toString(36) + Math.random().toString(36).substr(2, 6); }
+function escHtml(s) { const d = document.createElement('div'); d.textContent = s == null ? '' : String(s); return d.innerHTML; }
+function addHours(iso, h) { return new Date(new Date(iso).getTime() + h * 3600 * 1000).toISOString(); }
+// Business days skip Sat/Sun only. Demo simplification: no federal holidays.
+function addBusinessDays(iso, n) {
+  const d = new Date(iso);
+  let added = 0;
+  while (added < n) {
+    d.setUTCDate(d.getUTCDate() + 1);
+    const day = d.getUTCDay();
+    if (day !== 0 && day !== 6) added++;
+  }
+  return d.toISOString();
+}
+// FNV-1a 32-bit — a deterministic stand-in for the SHA-256 fingerprint the
+// Act would print in the statute (synchronous, so it can run at load).
+function fingerprint(obj) {
+  const s = JSON.stringify(obj);
+  let h = 0x811c9dc5;
+  for (let i = 0; i < s.length; i++) {
+    h ^= s.charCodeAt(i);
+    h = (h * 0x01000193) >>> 0;
+  }
+  return 'fp-' + h.toString(16).padStart(8, '0');
+}
+
+/* ========== VOTE MATH (reused from prior demo — verified rules) ========== */
+function majorityPassed(count) {
+  if (!count) return false;
+  const voting = count.yea + count.nay;
+  return voting > 0 && count.yea > count.nay;
+}
+function majorityNeeded(count) {
+  if (!count) return null;
+  const voting = count.yea + count.nay;
+  return voting > 0 ? Math.floor(voting / 2) + 1 : null;
+}
+function overrideThreshold(count) {
+  if (!count) return null;
+  const voting = count.yea + count.nay;
+  return voting > 0 ? Math.ceil(voting * 2 / 3) : null;
+}
+function overridePassed(count) {
+  const t = overrideThreshold(count);
+  return t !== null && count.yea >= t;
+}
+function isVetoOverridden(votes) {
+  if (!votes || votes.presidentialAction !== 'vetoed') return false;
+  return overridePassed(votes.vetoOverrideHouse) && overridePassed(votes.vetoOverrideSenate);
+}
+function statusLabel(s) {
+  const m = { draft:'Draft', in_committee:'In Committee', house_floor:'House Floor', house_voting:'House Voting', house_passed:'House Passed',
+    house_failed:'House Failed', senate_floor:'Senate Floor', senate_voting:'Senate Voting', senate_passed:'Senate Passed',
+    senate_failed:'Senate Failed', presidential_review:'Presidential Review', signed:'Signed', vetoed:'Vetoed',
+    veto_override_house:'Veto Override (House)', veto_override_senate:'Veto Override (Senate)', enacted:'Enacted', failed:'Failed' };
+  return m[s] || s;
+}
+function statusBadgeClass(s) {
+  if (['enacted','signed','house_passed','senate_passed'].includes(s)) return 'badge--green';
+  if (['failed','house_failed','senate_failed','vetoed'].includes(s)) return 'badge--red';
+  if (['house_voting','senate_voting','veto_override_house','veto_override_senate'].includes(s)) return 'badge--amber';
+  if (s === 'presidential_review') return 'badge--purple';
+  if (['house_floor','senate_floor','in_committee'].includes(s)) return 'badge--blue';
+  return 'badge--slate';
+}
+
+/* ========== CURATED DATA — the pilot bill ========== */
+// Every dollar figure is a bracketed DRAFT placeholder, as in the
+// discussion draft. TAS digits are illustrative: in reality the Treasury
+// Account Symbol is assigned by the Fiscal Service in CARS after
+// enactment — which is precisely the translation gap this bill closes.
+const OVERSIGHT_PING_THRESHOLD = 500000; // illustrative; a line may enact its own
+
+const PAYEE_LISTS = {
+  'list-ops': [
+    { id: 'p-payroll', name: 'House Office of Payroll & Benefits (via CAO)' },
+    { id: 'p-gsa', name: 'GSA (office lease)' },
+    { id: 'p-capitol-tech', name: 'Capitol Technology Services LLC (illustrative)' }
+  ],
+  'list-protocol': [
+    { id: 'p-redline', name: 'Redline Security Research LLC (illustrative, pre-qualified)' },
+    { id: 'p-researcher', name: 'New independent researcher — A. Doe (roster applicant)', needsJudgment: 'qualified' }
+  ],
+  'list-loc': [
+    { id: 'p-loc', name: 'Library of Congress' }
+  ],
+  'list-claims': [
+    { id: 'p-court', name: 'Claimants — by judgment of a court of competent jurisdiction only' }
+  ],
+  'list-comparison': [
+    { id: 'p-eval', name: 'National Academy of Public Administration (evaluation support)' },
+    { id: 'p-capitol-tech2', name: 'Capitol Technology Services LLC (illustrative)' }
+  ]
+};
+
+const PILOT_LINES = [
+  {
+    id: 'line-a', name: 'A — Record-keeping office operations',
+    enactedText: 'For salaries and expenses of the Office of the Fiscal Record, [$6,000,000], to remain available through fiscal year 2029.',
+    amount: 6000000, amountsAreDraft: true,
+    installments: [{ id: 'a-1', amount: 6000000, available: true, unlockedBy: 'enactment' }],
+    availability: { start: '2027-01-01', end: '2029-09-30', noYear: false },
+    purposeCodes: ['operations', 'payroll', 'facilities'],
+    payeeListId: 'list-ops', rail: 'A',
+    tas: { sp: '00', ata: '', aid: '009', bpoa: '2027', epoa: '2029', avail: '', main: '1501', sub: '000' },
+    judgmentFields: [], milestones: []
+  },
+  {
+    id: 'line-b', name: 'B — Building the Protocol (incl. red-team sub-line)',
+    enactedText: 'For development of the Protocol, [$4,000,000], to remain available through fiscal year 2029: Provided, That not more than [$500,000] shall be available for payments to qualified outside security researchers, in amounts certified as reasonable by the designated adjudicator.',
+    amount: 4000000, amountsAreDraft: true,
+    installments: [{ id: 'b-1', amount: 4000000, available: true, unlockedBy: 'enactment' }],
+    availability: { start: '2027-01-01', end: '2029-09-30', noYear: false },
+    purposeCodes: ['protocol-build', 'red-team'],
+    payeeListId: 'list-protocol', rail: 'A',
+    tas: { sp: '00', ata: '', aid: '009', bpoa: '2027', epoa: '2029', avail: '', main: '1502', sub: '000' },
+    judgmentFields: [
+      { term: 'qualified', quote: 'payments to qualified outside security researchers, in amounts certified as reasonable',
+        officer: 'GAO Adjudicator (designated)', clockBusinessDays: 3 }
+    ],
+    milestones: []
+  },
+  {
+    id: 'line-c', name: 'C — First project: Library of Congress study copies',
+    enactedText: 'For the first project — rendering the last ten years of the spending laws of the legislative branch into the grammar as non-operative study copies — [$3,000,000], in two equal installments; the second installment shall become available upon certification by the Comptroller General that the first tranche of converted laws and discrepancy reports has been delivered.',
+    amount: 3000000, amountsAreDraft: true,
+    installments: [
+      { id: 'c-1', amount: 1500000, available: true, unlockedBy: 'enactment' },
+      { id: 'c-2', amount: 1500000, available: false, unlockedBy: 'milestone-loc-1' }
+    ],
+    availability: { start: '2027-01-01', end: '2029-09-30', noYear: false },
+    purposeCodes: ['study-copies'],
+    payeeListId: 'list-loc', rail: 'A',
+    tas: { sp: '00', ata: '', aid: '009', bpoa: '2027', epoa: '2029', avail: '', main: '1503', sub: '000' },
+    judgmentFields: [],
+    milestones: [{ id: 'milestone-loc-1', description: 'GAO certifies first tranche of converted laws + discrepancy reports delivered', certifier: 'GAO', unlocksInstallment: 'c-2', status: 'pending' }]
+  },
+  {
+    id: 'line-d', name: 'D — Claims reserve',
+    enactedText: 'For a claims reserve, [$1,000,000], to remain available until expended, payable only upon the judgment of a court of competent jurisdiction.',
+    amount: 1000000, amountsAreDraft: true,
+    installments: [{ id: 'd-1', amount: 1000000, available: true, unlockedBy: 'enactment' }],
+    availability: { start: '2027-01-01', end: null, noYear: true },
+    purposeCodes: ['claims'],
+    payeeListId: 'list-claims', rail: 'A',
+    // No-year money: Availability Type X — BPOA/EPOA blank. The 8-component TAS rule.
+    tas: { sp: '00', ata: '', aid: '009', bpoa: '', epoa: '', avail: 'X', main: '1504', sub: '000' },
+    judgmentFields: [], milestones: []
+  },
+  {
+    id: 'line-e', name: 'E — Comparison line (paid from the Account)',
+    enactedText: 'For a comparison line, [$1,000,000], to remain available through fiscal year 2029, to be paid not through the Treasury but by the Federal Reserve Bank of New York from the Congressional General Account, under rules identical in every other respect.',
+    amount: 1000000, amountsAreDraft: true,
+    installments: [{ id: 'e-1', amount: 1000000, available: true, unlockedBy: 'enactment' }],
+    availability: { start: '2027-01-01', end: '2029-09-30', noYear: false },
+    purposeCodes: ['operations', 'evaluation'],
+    payeeListId: 'list-comparison', rail: 'B',
+    tas: { sp: '00', ata: '', aid: '009', bpoa: '2027', epoa: '2029', avail: '', main: '1505', sub: '000' },
+    judgmentFields: [], milestones: []
+  }
+];
+
+const BILL_SECTIONS = [
+  { id: 'sec-1', heading: 'SEC. 1. SHORT TITLE.', prose: 'This Act may be cited as the "Electronic Fiscal Information, Statutory Codification and Automated Legislation Act" (the "E-FISCAL Act").' },
+  { id: 'sec-101', heading: 'SEC. 101. THE JOURNAL.', prose: 'There is established a permanent public record of the fiscal law and fiscal events of the United States, kept by Congress: the laws themselves, enacted as data with their officially designated explanations; a running record of everything done under them — every request, check, warrant, and payment; and study copies of older laws, permanently stamped non-operative. Pages are added, never torn out or rewritten. Every item carries two dates — written and entered — and numbered versions with links.' },
+  { id: 'sec-102', heading: 'SEC. 102. THE LEDGER.', prose: 'The running balances — provided, committed, paid, remaining — shall be calculated from the Journal by a published recipe. The Ledger has no authority of its own; any person may re-run the recipe and must obtain identical numbers to the penny.' },
+  { id: 'sec-103', heading: 'SEC. 103. THE PROTOCOL.', prose: 'The public rulebook: the grammar in which spending lines are written, the questions any person may ask of the record, and who may write which entries. Changes require public comment; any change that would alter what a law means requires a new law, with that line drawn mechanically.' },
+  { id: 'sec-110', heading: 'SEC. 110. THE ACCOUNT.', prose: 'A Congressional General Account is established at the Federal Reserve Bank of New York, with the Bank as the branch\'s banker under a duty not to refuse, delay, or condition. Upon requisition of the Council, entered in the Journal, a special obligation of the United States arises by operation of this section — a general obligation, of the family of coins and United States notes, and expressly not of the family of Federal Reserve notes or Treasury securities — and the Bank shall credit the Account accordingly. Amounts under this section are not subject to any limit on the public debt and shall bear interest at the Bank\'s own overnight rate.' },
+  { id: 'sec-201', heading: 'SEC. 201. THE PILOT (PART B).', prose: 'The machinery shall be demonstrated entirely inside the legislative branch, on the schedule set out in the Annex, for three years. Every line runs under ordinary process until the Director and the Comptroller General jointly certify readiness, line by line, against standards published in advance. The independent evaluation, including the two-rail comparison, is due a full year before sunset.' },
+  { id: 'sec-301', heading: 'SEC. 301. CONFORMITY, WARRANTS, AND PAYMENT.', prose: 'Each payment request shall declare the commitment it pays down and shall be checked by published, re-runnable code: enough left, right purpose, inside the window, eligible recipient, no duplicate. On a pass, the warrant issues of itself; a clear violation is refused automatically, with reasons, fixable and never waivable; a judgment call is decided by one named adjudicator within three business days, in writing, and silence deems approval. On the main lines the officers of the chambers certify and the Treasury processes exactly as today, with one added rule: pay only against a warrant, and pay every warranted payment.' },
+  { id: 'sec-302', heading: 'SEC. 302. THE BRAKE AND THE FLOOR.', prose: 'Three of the four principals of the Committees on Appropriations may suspend new requests on a line, with reasons published instantly, expiring in 72 hours unless renewed; payments in flight shall never be touched. At no time shall the machine\'s operation or non-operation delay or prevent the payment of any amount lawfully due.' },
+  { id: 'sec-401', heading: 'SEC. 401. WHAT THIS ACT CAN NEVER DO.', prose: 'This Act is not a payment system and builds no rails. The Account is one institutional deposit account: expressly not a central bank digital currency, not a retail account, not a new payment network. A warrant is not money and orders no one. The enacted prose always controls over the data. There is no clawback: amounts paid are recoverable only by the judgment of a court. Nothing in this Act commands the executive branch, and nothing touches executive money without a new law. Classified spending is wholly out of scope. Nothing in this Act may push future programs away from designs that need discretion, and no official may use flag counts to grade any program or office.' }
+];
+
+const STUDY_COPIES = [
+  {
+    id: 'sc-clerk',
+    sourceLabel: 'P.L. 118-47, Div. E — Legislative Branch Appropriations Act, 2024 (excerpt, Office of the Clerk)',
+    prose: 'For salaries and expenses of the Office of the Clerk, including the positions of the Chaplain and the Historian, and including not more than $25,000 for official representation and reception expenses, $41,455,000, of which $9,000,000 shall remain available until expended.',
+    stamp: 'NON-OPERATIVE',
+    formalizedLines: [
+      { label: 'Clerk — annual sub-line', amount: 32455000, availability: 'FY2024 (BPOA 2024 / EPOA 2024)', notes: 'mechanical' },
+      { label: 'Clerk — no-year sub-line', amount: 9000000, availability: 'until expended (Availability Type X)', notes: 'mechanical' },
+      { label: 'Reception-expense cap', amount: 25000, availability: 'sub-cap within the annual sub-line', notes: 'cap mechanical; classification is judgment' }
+    ],
+    discrepancyReport: [
+      { provision: '"salaries and expenses … including the positions of the Chaplain and the Historian"', whyNotMechanical: 'The scope of "expenses" and "including" is not a list; it is a judgment about what the office reasonably needs.', judgmentFieldUsed: 'scope-of-expenses', assignedOfficer: 'Chief Administrative Officer of the House' },
+      { provision: '"official representation and reception expenses"', whyNotMechanical: 'The $25,000 ceiling is mechanical; deciding whether a given dinner IS a reception expense is classification judgment.', judgmentFieldUsed: 'expense-classification (cap enforced mechanically)', assignedOfficer: 'Chief Administrative Officer of the House' },
+      { provision: '"$9,000,000 shall remain available until expended"', whyNotMechanical: 'Fully mechanical — no-year availability (Type X). No judgment field needed.', judgmentFieldUsed: '— none —', assignedOfficer: '—' }
+    ]
+  },
+  {
+    id: 'sc-capitol',
+    sourceLabel: 'P.L. 118-47, Div. E (excerpt, Capitol building)',
+    prose: 'For all necessary expenses for the maintenance, care and operation of the Capitol, $74,304,000, of which $42,599,000 shall remain available until September 30, 2028.',
+    stamp: 'NON-OPERATIVE',
+    formalizedLines: [
+      { label: 'Capitol — annual sub-line', amount: 31705000, availability: 'FY2024', notes: 'mechanical' },
+      { label: 'Capitol — multi-year sub-line', amount: 42599000, availability: 'through 2028-09-30 (BPOA 2024 / EPOA 2028)', notes: 'mechanical' }
+    ],
+    discrepancyReport: [
+      { provision: '"all necessary expenses"', whyNotMechanical: '"Necessary" is the classic judgment term; the amount and window are mechanical, the purpose boundary is not.', judgmentFieldUsed: 'necessary-expenses', assignedOfficer: 'Architect of the Capitol' }
+    ]
+  }
+];
+
+/* ========== INITIAL STATE ========== */
+function getInitialState() {
+  const annex = { schemaVersion: '1.0', fingerprint: null, lines: JSON.parse(JSON.stringify(PILOT_LINES)) };
+  annex.fingerprint = fingerprint(annex.lines);
+  const readiness = {};
+  for (const l of annex.lines) readiness[l.id] = { mode: 'shadow', certifiedBy: [], certifiedAt: null };
+  return {
+    simNow: '2027-01-04T09:00:00.000Z', // a Monday; the demo clock only moves when moved
+    currentView: 'problem',
+    selectedLineId: 'line-a',
+    selectedEntrySeq: null,
+    selectedStudyCopyId: 'sc-clerk',
+    billTab: 'text',
+    journalFilter: 'all',
+    bill: {
+      id: 'efiscal-1', title: 'The E-FISCAL Act (discussion draft)',
+      status: 'draft',
+      votes: { houseVotes: [], senateVotes: [], houseCount: { yea:0,nay:0,present:0,absent:0 }, senateCount: { yea:0,nay:0,present:0,absent:0 }, presidentialAction: null, vetoOverrideHouse: null, vetoOverrideSenate: null, cloture: null, vpTieBreak: false },
+      sections: BILL_SECTIONS,
+      annex
+    },
+    certified: false,               // Clerk + Secretary certification into the Journal
+    journal: [],                    // APPEND-ONLY — the single source of truth
+    payees: PAYEE_LISTS,
+    studyCopies: STUDY_COPIES,
+    readiness,
+    brake: { active: false, lineId: null, pulledAt: null, expiresAt: null, holders: [], reasons: '', renewals: 0 },
+    floor: { systemDown: false, downSince: null, oldWayPayments: [] },
+    account: { balance: 0, rateLabel: "the Bank's own overnight rate (illustrative)", obligationOutstanding: 0 },
+    council: {
+      members: ['Comptroller General (chair, rotating)', 'CBO Director', 'House Legislative Counsel', 'Senate Legislative Counsel'],
+      lastVote: null
+    },
+    oversightPings: [],
+    reconstruction: null            // last outside-reconstruction result (derived display state)
+  };
+}
+
+/* ========== JOURNAL HELPERS ========== */
+function nextSeq(journal) { return journal.length ? journal[journal.length - 1].seq + 1 : 1; }
+// Append an entry. publicAt defaults to +24h ("public in 24 hours");
+// instant=true for brake entries ("reasons published instantly").
+function appendEntry(s, kind, payload, opts) {
+  opts = opts || {};
+  const e = {
+    seq: nextSeq(s.journal),
+    id: kind + '-' + uid(),
+    version: 1,
+    supersedes: null,
+    kind,
+    writtenAt: s.simNow,
+    enteredAt: s.simNow,
+    publicAt: opts.instant ? s.simNow : addHours(s.simNow, 24),
+    lineId: opts.lineId || null,
+    refs: opts.refs || [],
+    payload
+  };
+  s.journal.push(e);
+  return e;
+}
+function entryBySeq(journal, seq) { return journal.find(e => e.seq === seq) || null; }
+function isPublic(entry, simNow) { return new Date(entry.publicAt) <= new Date(simNow); }
+// Walk refs back to the law entry — "show the chain from this payment back to the law."
+function chainFor(journal, seq) {
+  const chain = [];
+  let cur = entryBySeq(journal, seq);
+  const guard = new Set();
+  while (cur && !guard.has(cur.seq)) {
+    guard.add(cur.seq);
+    chain.push(cur);
+    cur = cur.refs.length ? entryBySeq(journal, cur.refs[0]) : null;
+  }
+  return chain;
+}
+
+/* ========== THE LEDGER — the published recipe ==========
+   The Ledger has no authority of its own. It is a pure function of the
+   Journal: anyone can re-run this and must get identical numbers. */
+const LEDGER_RECIPE = [
+  'for each enacted line L:',
+  '  provided(L)  = sum of L.installments where available',
+  '  committed(L) = sum of approved commitment entries on L',
+  '  paid(L)      = sum of payment entries on L',
+  '             + sum of reconciliation entries on L (floor fallback)',
+  '  remaining(L) = provided(L) - committed(L)   // unobligated',
+  '  open(L)      = committed(L) - paid(L)       // obligated, unpaid',
+  'totals = sum over lines; report to the penny'
+].join('\n');
+
+function deriveLedger(journal, lines) {
+  const out = { lines: {}, totals: { provided: 0, committed: 0, paid: 0, remaining: 0, open: 0 } };
+  for (const line of lines) {
+    const provided = line.installments.filter(i => i.available).reduce((s, i) => s + i.amount, 0);
+    const commitments = journal.filter(e => e.kind === 'commitment' && e.lineId === line.id && !e.payload.refused);
+    const committed = commitments.reduce((s, e) => s + e.payload.amount, 0);
+    const paid = journal.filter(e => (e.kind === 'payment' || e.kind === 'reconciliation') && e.lineId === line.id)
+      .reduce((s, e) => s + e.payload.amount, 0);
+    const perCommitment = commitments.map(c => {
+      const paidDown = journal.filter(e => (e.kind === 'payment' || e.kind === 'reconciliation') && e.payload.commitmentRef === c.seq)
+        .reduce((s, e) => s + e.payload.amount, 0);
+      const requestedOpen = journal.filter(e => e.kind === 'request' && e.payload.commitmentRef === c.seq && requestHasLiveWarrantPathPending(journal, e))
+        .reduce((s, e) => s + e.payload.amount, 0);
+      return { seq: c.seq, description: c.payload.description, contractor: c.payload.contractor, committed: c.payload.amount, paidDown, requestedOpen, open: c.payload.amount - paidDown };
+    });
+    out.lines[line.id] = { provided, committed, paid, remaining: provided - committed, open: committed - paid, perCommitment };
+    out.totals.provided += provided; out.totals.committed += committed; out.totals.paid += paid;
+  }
+  out.totals.remaining = out.totals.provided - out.totals.committed;
+  out.totals.open = out.totals.committed - out.totals.paid;
+  return out;
+}
+// A request that produced a warrant not yet paid, or a pending flag,
+// still holds claim against its commitment (prevents duplicate over-draws).
+function requestHasLiveWarrantPathPending(journal, reqEntry) {
+  const check = journal.find(e => e.kind === 'check' && e.refs.includes(reqEntry.seq));
+  if (!check) return false;
+  if (check.payload.outcome === 'VIOLATION') return false;
+  const warrant = journal.find(e => e.kind === 'warrant' && chainContains(journal, e.seq, reqEntry.seq));
+  if (warrant) {
+    const paid = journal.find(e => e.kind === 'payment' && e.refs.includes(warrant.seq));
+    return !paid;
+  }
+  // pending judgment flag
+  if (check.payload.outcome === 'FLAG') {
+    const adj = journal.find(e => e.kind === 'adjudication' && e.payload.flagRef === check.seq);
+    return !adj || adj.payload.decision === 'approve';
+  }
+  return false;
+}
+function chainContains(journal, fromSeq, targetSeq) {
+  return chainFor(journal, fromSeq).some(e => e.seq === targetSeq);
+}
+
+function pendingFlags(journal) {
+  return journal.filter(e => e.kind === 'check' && e.payload.outcome === 'FLAG')
+    .filter(flag => !journal.some(a => a.kind === 'adjudication' && a.payload.flagRef === flag.seq));
+}
+function warrantsAwaitingPayment(journal) {
+  return journal.filter(e => e.kind === 'warrant')
+    .filter(w => !journal.some(p => p.kind === 'payment' && p.refs.includes(w.seq)));
+}
+function payeeById(payees, listId, payeeId) {
+  return (payees[listId] || []).find(p => p.id === payeeId) || null;
+}
+function lineById(state, lineId) { return state.bill.annex.lines.find(l => l.id === lineId) || null; }
+
+/* ========== THE CONFORMITY CHECK — published, re-runnable code ==========
+   Five tests: enough left, right purpose, inside the window, eligible
+   recipient, no duplicate. Three outcomes: PASS / VIOLATION / FLAG. */
+function runConformityCheck(state, req) {
+  // req: { lineId, commitmentRef, payeeId, amount, purposeCode, invoiceNo }
+  const line = lineById(state, req.lineId);
+  const ledger = deriveLedger(state.journal, state.bill.annex.lines);
+  const L = ledger.lines[req.lineId];
+  const commitment = entryBySeq(state.journal, req.commitmentRef);
+  const tests = [];
+  let citedTerm = null;
+
+  // 1. enough-left: against the commitment's open balance (incl. live pending requests)
+  const per = commitment ? L.perCommitment.find(c => c.seq === commitment.seq) : null;
+  const headroom = per ? per.open - per.requestedOpen : 0;
+  const enoughLeft = !!per && req.amount <= headroom;
+  tests.push({ id: 'enough-left', pass: enoughLeft, detail: per ? `${formatExact(req.amount)} requested vs ${formatExact(Math.max(0, headroom))} open on commitment #${commitment.seq}` : 'no such commitment' });
+  if (!enoughLeft) citedTerm = citedTerm || (line ? line.enactedText : 'the enacted amount');
+
+  // 2. right-purpose
+  const rightPurpose = !!line && line.purposeCodes.includes(req.purposeCode);
+  tests.push({ id: 'right-purpose', pass: rightPurpose, detail: `purpose "${req.purposeCode}" vs enacted purposes [${line ? line.purposeCodes.join(', ') : ''}]` });
+  if (!rightPurpose) citedTerm = citedTerm || (line ? line.enactedText : '');
+
+  // 3. inside-window (31 U.S.C. 1502 analogue — checked at request time on the demo clock)
+  const now = new Date(state.simNow);
+  const insideWindow = !!line && new Date(line.availability.start) <= now && (line.availability.noYear || now <= new Date(line.availability.end + 'T23:59:59Z'));
+  tests.push({ id: 'inside-window', pass: insideWindow, detail: line ? (line.availability.noYear ? 'no-year (Availability Type X)' : `window ${line.availability.start} → ${line.availability.end}`) : '' });
+  if (!insideWindow) citedTerm = citedTerm || (line ? line.enactedText : '');
+
+  // 4. eligible-recipient: on the enacted payee list
+  const payee = line ? payeeById(state.payees, line.payeeListId, req.payeeId) : null;
+  tests.push({ id: 'eligible-recipient', pass: !!payee, detail: payee ? payee.name : `payee not on the enacted list for this line` });
+  if (!payee) citedTerm = citedTerm || (line ? line.enactedText : '');
+
+  // 5. no-duplicate: same commitment + invoice number
+  const dup = state.journal.some(e => e.kind === 'request' && e.payload.commitmentRef === req.commitmentRef && e.payload.invoiceNo === req.invoiceNo);
+  tests.push({ id: 'no-duplicate', pass: !dup, detail: dup ? `invoice ${req.invoiceNo} already requested against commitment #${req.commitmentRef}` : `invoice ${req.invoiceNo} is new` });
+  if (dup) citedTerm = citedTerm || 'one payment per obligation and invoice';
+
+  const anyFail = tests.some(t => !t.pass);
+  if (anyFail) {
+    return { outcome: 'VIOLATION', tests, citedTerm, flag: null };
+  }
+  // Judgment trigger: the machine never evaluates a judgment term — it
+  // routes it to the named officer with a clock.
+  if (payee && payee.needsJudgment && line.judgmentFields.length) {
+    const jf = line.judgmentFields.find(j => j.term === payee.needsJudgment) || line.judgmentFields[0];
+    return {
+      outcome: 'FLAG', tests, citedTerm: null,
+      flag: {
+        term: jf.term, quote: jf.quote, adjudicator: jf.officer,
+        deadline: addBusinessDays(state.simNow, jf.clockBusinessDays),
+        largeAmount: req.amount >= OVERSIGHT_PING_THRESHOLD
+      }
+    };
+  }
+  return { outcome: 'PASS', tests, citedTerm: null, flag: null };
+}
+
+// Commitment-time check ("the check runs at contract-signing — where
+// spending law actually bites — and again at payment").
+function runCommitmentCheck(state, com) {
+  const line = lineById(state, com.lineId);
+  const ledger = deriveLedger(state.journal, state.bill.annex.lines);
+  const L = ledger.lines[com.lineId];
+  const tests = [];
+  let citedTerm = null;
+  const enoughLeft = !!L && com.amount <= L.remaining;
+  tests.push({ id: 'enough-left', pass: enoughLeft, detail: L ? `${formatExact(com.amount)} vs ${formatExact(Math.max(0, L.remaining))} unobligated` : '' });
+  if (!enoughLeft) citedTerm = line ? line.enactedText : '';
+  const now = new Date(state.simNow);
+  const insideWindow = !!line && new Date(line.availability.start) <= now && (line.availability.noYear || now <= new Date(line.availability.end + 'T23:59:59Z'));
+  tests.push({ id: 'inside-window', pass: insideWindow, detail: line ? (line.availability.noYear ? 'no-year (X)' : `window ${line.availability.start} → ${line.availability.end}`) : '' });
+  if (!insideWindow) citedTerm = citedTerm || (line ? line.enactedText : '');
+  const rightPurpose = !!line && line.purposeCodes.includes(com.purposeCode);
+  tests.push({ id: 'right-purpose', pass: rightPurpose, detail: `purpose "${com.purposeCode}"` });
+  if (!rightPurpose) citedTerm = citedTerm || (line ? line.enactedText : '');
+  return { outcome: tests.some(t => !t.pass) ? 'VIOLATION' : 'PASS', tests, citedTerm };
+}
+
+/* ========== DEADLINE PROCESSING (runs inside ADVANCE_CLOCK) ========== */
+function processDeadlines(s) {
+  // 1. Overdue judgment flags → silence deems approval, by operation of law.
+  for (const flag of pendingFlags(s.journal)) {
+    if (new Date(flag.payload.flag.deadline) <= new Date(s.simNow)) {
+      const adj = appendEntry(s, 'adjudication', {
+        flagRef: flag.seq, decision: 'approve', deemed: true,
+        decidedBy: 'operation of law — silence deems approval (no adjudication within the enacted clock)',
+        reasons: 'The named adjudicator did not act within ' + flag.payload.flag.term + '’s enacted clock; silence can never be a way to sit on lawful money.'
+      }, { lineId: flag.lineId, refs: [flag.seq] });
+      appendEntry(s, 'warrant', { checkRef: flag.seq, autoIssued: true, deemed: true, amount: reqAmountForCheck(s.journal, flag), payeeId: reqPayeeForCheck(s.journal, flag) },
+        { lineId: flag.lineId, refs: [adj.seq] });
+    }
+  }
+  // 2. Expired brake → automatic release ("expiring in 72 hours unless renewed").
+  if (s.brake.active && new Date(s.brake.expiresAt) <= new Date(s.simNow)) {
+    s.brake.active = false;
+    appendEntry(s, 'brake-release', { reason: 'expired after 72 hours without renewal', lineId: s.brake.lineId }, { lineId: s.brake.lineId, instant: true });
+  }
+}
+function reqForCheck(journal, checkEntry) {
+  return entryBySeq(journal, checkEntry.refs[0]);
+}
+function reqAmountForCheck(journal, checkEntry) {
+  const r = reqForCheck(journal, checkEntry);
+  return r ? r.payload.amount : 0;
+}
+function reqPayeeForCheck(journal, checkEntry) {
+  const r = reqForCheck(journal, checkEntry);
+  return r ? r.payload.payeeId : null;
+}
+function nextDeadline(s) {
+  const candidates = [];
+  for (const f of pendingFlags(s.journal)) candidates.push(f.payload.flag.deadline);
+  if (s.brake.active) candidates.push(s.brake.expiresAt);
+  for (const e of s.journal) if (!isPublic(e, s.simNow)) candidates.push(e.publicAt);
+  const future = candidates.filter(c => new Date(c) > new Date(s.simNow)).sort();
+  return future.length ? future[0] : null;
+}
+
+/* ========== STORE & REDUCER ========== */
+const Store = {
+  _state: null,
+  _listeners: [],
+  getState() { return this._state; },
+  dispatch(action) {
+    this._state = reducer(this._state, action);
+    this._persist();
+    this._notify();
+  },
+  subscribe(fn) { this._listeners.push(fn); return () => { this._listeners = this._listeners.filter(l => l !== fn); }; },
+  _notify() { this._listeners.forEach(fn => fn(this._state)); },
+  _persist() { try { localStorage.setItem('efiscal-demo-state-v1', JSON.stringify(this._state)); } catch(e) {} },
+  init() {
+    try { const s = localStorage.getItem('efiscal-demo-state-v1'); if (s) { this._state = JSON.parse(s); return; } } catch(e) {}
+    this._state = getInitialState();
+  }
+};
+
+function reducer(state, action) {
+  const s = JSON.parse(JSON.stringify(state));
+  switch (action.type) {
+    case 'SET_STATE': return action.payload;
+    case 'SET_VIEW': s.currentView = action.payload; return s;
+    case 'SELECT_LINE': s.selectedLineId = action.payload; return s;
+    case 'SELECT_ENTRY': s.selectedEntrySeq = s.selectedEntrySeq === action.payload ? null : action.payload; return s;
+    case 'SELECT_STUDY_COPY': s.selectedStudyCopyId = action.payload; return s;
+    case 'SET_BILL_TAB': s.billTab = action.payload; return s;
+    case 'SET_JOURNAL_FILTER': s.journalFilter = action.payload; return s;
+
+    /* --- enactment (vote machinery writes here) --- */
+    case 'UPDATE_BILL_STATUS': s.bill.status = action.payload.status; return s;
+    case 'UPDATE_VOTES': Object.assign(s.bill.votes, action.payload.votes); return s;
+    case 'ENACT_BILL': s.bill.status = 'enacted'; return s; // nothing hits the Journal yet
+    case 'CERTIFY_ENACTMENT': {
+      // The Clerk and the Secretary — the officers who attest enrolled
+      // bills today — jointly certify the enacted formalization into the
+      // Journal, whose law record they hold.
+      if (s.bill.status !== 'enacted' || s.certified) return s;
+      const law = appendEntry(s, 'law', {
+        title: s.bill.title, fingerprint: s.bill.annex.fingerprint,
+        lineIds: s.bill.annex.lines.map(l => l.id),
+        certifiedBy: ['Clerk of the House', 'Secretary of the Senate']
+      });
+      appendEntry(s, 'certification', { lawRef: law.seq, note: 'Enrollment certification: printed text controls; the file is the same content in a second form.' }, { refs: [law.seq] });
+      s.certified = true;
+      return s;
+    }
+    case 'CERTIFY_READINESS': {
+      // Shadow first: a line runs under ordinary process until the
+      // Director and the Comptroller General jointly certify readiness.
+      const r = s.readiness[action.payload.lineId];
+      if (!r || r.mode === 'certified' || !s.certified) return s;
+      r.mode = 'certified';
+      r.certifiedBy = ['Director, Office of the Fiscal Record', 'Comptroller General'];
+      r.certifiedAt = s.simNow;
+      appendEntry(s, 'readiness-cert', { lineId: action.payload.lineId, certifiedBy: r.certifiedBy, standard: 'published in advance; quarantined trial (test data never enters the Journal)' }, { lineId: action.payload.lineId });
+      return s;
+    }
+
+    /* --- the payment pipeline --- */
+    case 'ADD_COMMITMENT': {
+      const { lineId, amount, contractor, description, purposeCode } = action.payload;
+      if (!s.certified) return s;
+      if (s.readiness[lineId] && s.readiness[lineId].mode !== 'certified') {
+        appendEntry(s, 'note', { note: 'Refused: line is in SHADOW — it runs under ordinary process until the Director and Comptroller General certify readiness.', refusedKind: 'commitment', lineId }, { lineId, instant: true });
+        return s;
+      }
+      const check = runCommitmentCheck(s, { lineId, amount, purposeCode });
+      const lawEntry = s.journal.find(e => e.kind === 'law');
+      const lawRefs = lawEntry ? [lawEntry.seq] : [];
+      if (check.outcome === 'VIOLATION') {
+        appendEntry(s, 'commitment', { amount, contractor, description, purposeCode, refused: true, tests: check.tests, citedTerm: check.citedTerm }, { lineId, refs: lawRefs });
+        return s;
+      }
+      appendEntry(s, 'commitment', { amount, contractor, description, purposeCode, refused: false, tests: check.tests }, { lineId, refs: lawRefs });
+      return s;
+    }
+    case 'SUBMIT_REQUEST': {
+      const req = action.payload; // { lineId, commitmentRef, payeeId, amount, purposeCode, invoiceNo }
+      if (!s.certified) return s;
+      if (s.floor.systemDown) {
+        // The floor: if the system is down, payments proceed the old way
+        // and reconcile after — never delay a lawful payment.
+        s.floor.oldWayPayments.push({ at: s.simNow, ...req });
+        return s;
+      }
+      if (s.readiness[req.lineId] && s.readiness[req.lineId].mode !== 'certified') {
+        appendEntry(s, 'note', { note: 'Refused: line is in SHADOW — ordinary process applies until readiness is certified.', refusedKind: 'request', lineId: req.lineId }, { lineId: req.lineId, instant: true });
+        return s;
+      }
+      if (s.brake.active && (s.brake.lineId === null || s.brake.lineId === req.lineId)) {
+        // The brake suspends NEW requests only; it is not a conformity
+        // violation and payments in flight are never touched.
+        appendEntry(s, 'note', { note: 'Refused: the BRAKE is pulled on this line (3 of 4 Appropriations principals). New requests are suspended; reasons are on the record; the brake expires in 72 hours unless renewed.', refusedKind: 'request', brake: true, lineId: req.lineId }, { lineId: req.lineId, instant: true });
+        return s;
+      }
+      // Run the check BEFORE appending the request entry, so the request
+      // does not collide with itself on the no-duplicate test.
+      const result = runConformityCheck(s, req);
+      const reqEntry = appendEntry(s, 'request', { ...req }, { lineId: req.lineId, refs: [req.commitmentRef] });
+      const checkEntry = appendEntry(s, 'check', { requestRef: reqEntry.seq, outcome: result.outcome, tests: result.tests, citedTerm: result.citedTerm, flag: result.flag }, { lineId: req.lineId, refs: [reqEntry.seq] });
+      if (result.outcome === 'PASS') {
+        // The warrant issues by itself — no human touches it, and none could.
+        appendEntry(s, 'warrant', { checkRef: checkEntry.seq, autoIssued: true, deemed: false, amount: req.amount, payeeId: req.payeeId }, { lineId: req.lineId, refs: [checkEntry.seq] });
+      } else if (result.outcome === 'FLAG' && result.flag.largeAmount) {
+        // Large flagged amounts ping the overseers in real time — without
+        // pausing the clock.
+        s.oversightPings.push({ at: s.simNow, checkRef: checkEntry.seq, amount: req.amount, sentTo: 'Chairs and ranking members, Committees on Appropriations' });
+      }
+      return s;
+    }
+    case 'ADJUDICATE_FLAG': {
+      const { flagRef, decision, reasons, citedTerm } = action.payload;
+      const flag = entryBySeq(s.journal, flagRef);
+      if (!flag || flag.kind !== 'check' || flag.payload.outcome !== 'FLAG') return s;
+      if (s.journal.some(a => a.kind === 'adjudication' && a.payload.flagRef === flagRef)) return s;
+      // A denial must cite the exact enacted term violated.
+      if (decision === 'deny' && !citedTerm) return s;
+      const adj = appendEntry(s, 'adjudication', { flagRef, decision, reasons: reasons || '', citedTerm: citedTerm || null, deemed: false, decidedBy: flag.payload.flag.adjudicator }, { lineId: flag.lineId, refs: [flagRef] });
+      if (decision === 'approve') {
+        appendEntry(s, 'warrant', { checkRef: flagRef, autoIssued: true, deemed: false, amount: reqAmountForCheck(s.journal, flag), payeeId: reqPayeeForCheck(s.journal, flag) }, { lineId: flag.lineId, refs: [adj.seq] });
+      }
+      return s;
+    }
+    case 'EXECUTE_PAYMENT': {
+      const warrant = entryBySeq(s.journal, action.payload.warrantRef);
+      if (!warrant || warrant.kind !== 'warrant') return s;
+      if (s.journal.some(p => p.kind === 'payment' && p.refs.includes(warrant.seq))) return s;
+      const line = lineById(s, warrant.lineId);
+      const check = entryBySeq(s.journal, warrant.payload.checkRef);
+      const reqEntry = check ? reqForCheck(s.journal, check) : null;
+      const rail = line ? line.rail : 'A';
+      if (rail === 'B') {
+        if (s.account.balance < warrant.payload.amount) {
+          appendEntry(s, 'note', { note: 'Payment held: the Congressional General Account balance is insufficient. The Council must requisition first (the Bank credits on requisition; no Treasury officer acts).', refusedKind: 'payment' }, { lineId: warrant.lineId, instant: true });
+          return s;
+        }
+        s.account.balance -= warrant.payload.amount;
+      }
+      appendEntry(s, 'payment', {
+        warrantRef: warrant.seq, amount: warrant.payload.amount, payeeId: warrant.payload.payeeId,
+        commitmentRef: reqEntry ? reqEntry.payload.commitmentRef : null,
+        rail,
+        certifiedBy: rail === 'A' ? 'House CAO / Secretary of the Senate (the chambers’ disbursing officers, 2 U.S.C. §§5309, 1907)' : 'Federal Reserve Bank of New York, from the Congressional General Account (janitor rule: the Bank holds no key)',
+        processedBy: rail === 'A' ? 'Treasury, exactly as today — pay only against a warrant, and pay every warranted payment' : 'the Fed’s ordinary systems'
+      }, { lineId: warrant.lineId, refs: [warrant.seq] });
+      return s;
+    }
+
+    /* --- the clock --- */
+    case 'ADVANCE_CLOCK': {
+      if (action.payload.toNext) {
+        const nd = nextDeadline(s);
+        if (!nd) return s;
+        s.simNow = addHours(nd, 0.02); // land just past it
+      } else if (action.payload.businessDays) {
+        s.simNow = addBusinessDays(s.simNow, action.payload.businessDays);
+      } else {
+        s.simNow = addHours(s.simNow, action.payload.hours || 1);
+      }
+      processDeadlines(s);
+      return s;
+    }
+
+    /* --- the brake --- */
+    case 'PULL_BRAKE': {
+      const { holders, reasons, lineId } = action.payload;
+      if (!holders || holders.length < 3) return s; // three of four to pull
+      s.brake = { active: true, lineId: lineId || null, pulledAt: s.simNow, expiresAt: addHours(s.simNow, 72), holders, reasons: reasons || '', renewals: 0 };
+      appendEntry(s, 'brake', { holdersSigned: holders, reasons: reasons || '', lineId: lineId || null, expiresAt: s.brake.expiresAt, note: 'Suspends NEW requests only. Payments in flight are never touched. A separate technical switch merely returns a line to ordinary processing and never stops money.' }, { lineId: lineId || null, instant: true });
+      return s;
+    }
+    case 'RENEW_BRAKE': {
+      if (!s.brake.active) return s;
+      s.brake.expiresAt = addHours(s.brake.expiresAt, 72);
+      s.brake.renewals += 1;
+      appendEntry(s, 'brake', { renewed: true, holdersSigned: s.brake.holders, expiresAt: s.brake.expiresAt }, { lineId: s.brake.lineId, instant: true });
+      return s;
+    }
+    case 'RELEASE_BRAKE': {
+      if (!s.brake.active) return s;
+      s.brake.active = false;
+      appendEntry(s, 'brake-release', { reason: 'released by the principals', lineId: s.brake.lineId }, { lineId: s.brake.lineId, instant: true });
+      return s;
+    }
+
+    /* --- the floor --- */
+    case 'SET_SYSTEM_DOWN': {
+      s.floor.systemDown = true; s.floor.downSince = s.simNow;
+      return s;
+    }
+    case 'RESTORE_SYSTEM': {
+      s.floor.systemDown = false;
+      // Reconcile after: every old-way payment enters the Journal now.
+      for (const p of s.floor.oldWayPayments) {
+        appendEntry(s, 'reconciliation', { note: 'Paid the old way while the system was down; reconciled into the record after restore. At no time shall the machine’s operation or non-operation delay or prevent the payment of any amount lawfully due.', at: p.at, amount: p.amount, payeeId: p.payeeId, commitmentRef: p.commitmentRef, lineId: p.lineId }, { lineId: p.lineId });
+      }
+      s.floor.oldWayPayments = [];
+      return s;
+    }
+
+    /* --- milestones & the Account --- */
+    case 'CERTIFY_MILESTONE': {
+      for (const line of s.bill.annex.lines) {
+        const m = line.milestones.find(m => m.id === action.payload.milestoneId);
+        if (m && m.status === 'pending') {
+          m.status = 'certified';
+          const inst = line.installments.find(i => i.id === m.unlocksInstallment);
+          if (inst) inst.available = true;
+          appendEntry(s, 'milestone-cert', { milestoneId: m.id, certifier: m.certifier, description: m.description, unlockedInstallment: m.unlocksInstallment, note: 'A condition that executes itself: the second installment becomes available upon certification, automatically.' }, { lineId: line.id });
+        }
+      }
+      return s;
+    }
+    case 'COUNCIL_REQUISITION': {
+      const { amount, basis, votes } = action.payload;
+      if (!votes || votes < 3) return s; // three votes to act; ties fail toward ordinary processing
+      const reqn = appendEntry(s, 'requisition', { amount, basis, by: 'The Council', note: 'As-needed funding on the consumer-bureau pattern; its basis entered in the Journal. No Treasury officer takes any action at any step.' });
+      appendEntry(s, 'credit', { requisitionRef: reqn.seq, amount, by: 'Federal Reserve Bank of New York', note: 'A special obligation of the United States arises by operation of the statute; the Bank records it and credits the Account. General obligation — coins-and-United-States-notes family — expressly not a Federal Reserve note or a Treasury security. Outside the debt limit; pays the Bank’s own overnight rate.' }, { refs: [reqn.seq] });
+      s.account.balance += amount;
+      s.account.obligationOutstanding += amount;
+      s.council.lastVote = { at: s.simNow, votes, amount };
+      return s;
+    }
+
+    /* --- outside reconstruction --- */
+    case 'RUN_RECONSTRUCTION': {
+      const official = deriveLedger(s.journal, s.bill.annex.lines);
+      const rebuilt = deriveLedger(JSON.parse(JSON.stringify(s.journal)), JSON.parse(JSON.stringify(s.bill.annex.lines)));
+      s.reconstruction = {
+        at: s.simNow,
+        match: JSON.stringify(official) === JSON.stringify(rebuilt),
+        officialTotals: official.totals, rebuiltTotals: rebuilt.totals
+      };
+      return s;
+    }
+    case 'RESET_DEMO': return getInitialState();
+    default: return s;
+  }
+}
+
+/* ========== VOTE SIMULATION (reused machinery, single bill) ========== */
+const HOUSE_MEMBERS = []; const SENATE_MEMBERS = [];
+for (let i = 1; i <= 435; i++) HOUSE_MEMBERS.push({ id: 'h' + i, name: 'Representative ' + i, chamber: 'house' });
+for (let i = 1; i <= 100; i++) SENATE_MEMBERS.push({ id: 's' + i, name: 'Senator ' + i, chamber: 'senate' });
+
+let voteAnimating = false;
+let voteInterval = null;
+
+function generateVoteOutcome(totalMembers, members, targetYea, variance) {
+  const yea = Math.min(totalMembers, Math.max(0, targetYea + Math.floor((Math.random() - 0.5) * variance * 2)));
+  const absent = Math.floor(Math.random() * Math.min(10, totalMembers * 0.05));
+  const present = Math.floor(Math.random() * Math.min(5, totalMembers * 0.02));
+  const nay = totalMembers - yea - absent - present;
+  const outcomes = [];
+  for (let i = 0; i < totalMembers; i++) {
+    let vote;
+    if (i < yea) vote = 'yea';
+    else if (i < yea + nay) vote = 'nay';
+    else if (i < yea + nay + present) vote = 'present';
+    else vote = 'absent';
+    outcomes.push({ memberId: members[i].id, vote });
+  }
+  for (let i = outcomes.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [outcomes[i], outcomes[j]] = [outcomes[j], outcomes[i]];
+  }
+  return outcomes;
+}
+
+function startVoteAnimation(chamber, isOverride) {
+  if (voteAnimating) return;
+  voteAnimating = true;
+  const isHouse = chamber === 'house';
+  const totalMembers = isHouse ? 435 : 100;
+  const members = isHouse ? HOUSE_MEMBERS : SENATE_MEMBERS;
+  const targetYea = isHouse ? (isOverride ? 292 : 237) : (isOverride ? 68 : 55);
+  const variance = isHouse ? 20 : 8;
+  const outcomes = generateVoteOutcome(totalMembers, members, targetYea, variance);
+  let idx = 0;
+  const counts = { yea: 0, nay: 0, present: 0, absent: 0 };
+  const prefix = isOverride ? `override-${chamber}` : chamber;
+
+  voteInterval = setInterval(() => {
+    if (idx >= outcomes.length) {
+      clearInterval(voteInterval);
+      voteAnimating = false;
+      const voteUpdate = {};
+      if (isOverride) {
+        if (isHouse) voteUpdate.vetoOverrideHouse = { ...counts };
+        else voteUpdate.vetoOverrideSenate = { ...counts };
+      } else {
+        if (isHouse) voteUpdate.houseCount = { ...counts };
+        else voteUpdate.senateCount = { ...counts };
+      }
+      Store.dispatch({ type: 'UPDATE_VOTES', payload: { votes: voteUpdate } });
+      if (!isOverride) {
+        Store.dispatch({ type: 'UPDATE_BILL_STATUS', payload: { status: majorityPassed(counts) ? (isHouse ? 'house_passed' : 'senate_passed') : (isHouse ? 'house_failed' : 'senate_failed') } });
+      } else {
+        const st = Store.getState();
+        if (isVetoOverridden(st.bill.votes)) Store.dispatch({ type: 'ENACT_BILL' });
+      }
+      return;
+    }
+    const v = outcomes[idx];
+    counts[v.vote]++;
+    idx++;
+    const yeaEl = document.getElementById(`${prefix}-yea-count`);
+    const nayEl = document.getElementById(`${prefix}-nay-count`);
+    const otherEl = document.getElementById(`${prefix}-other-count`);
+    const yeaBar = document.getElementById(`${prefix}-yea-bar`);
+    const nayBar = document.getElementById(`${prefix}-nay-bar`);
+    const otherBar = document.getElementById(`${prefix}-other-bar`);
+    const castEl = document.getElementById(`${prefix}-cast`);
+    if (yeaEl) yeaEl.textContent = counts.yea;
+    if (nayEl) nayEl.textContent = counts.nay;
+    if (otherEl) otherEl.textContent = counts.present + counts.absent;
+    if (yeaBar) yeaBar.style.width = (counts.yea / totalMembers * 100) + '%';
+    if (nayBar) nayBar.style.width = (counts.nay / totalMembers * 100) + '%';
+    if (otherBar) otherBar.style.width = ((counts.present + counts.absent) / totalMembers * 100) + '%';
+    if (castEl) castEl.textContent = idx;
+  }, 7);
+}
+
+/* ========== FORM STATE (local, not persisted) ========== */
+const formState = {
+  commitment: { lineId: 'line-a', amount: '', contractor: '', description: '', purposeCode: '' },
+  request: { lineId: 'line-a', commitmentRef: '', payeeId: '', amount: '', purposeCode: '', invoiceNo: '' },
+  adjReasons: {},
+  requisition: { amount: '', basis: '' },
+  brakeForm: { holders: [false, false, false, false], reasons: '', lineId: '' }
+};
+const BRAKE_PRINCIPALS = [
+  'Chair, House Committee on Appropriations',
+  'Ranking Member, House Committee on Appropriations',
+  'Chair, Senate Committee on Appropriations',
+  'Ranking Member, Senate Committee on Appropriations'
+];
+
+/* ========== RENDER ENGINE ========== */
+function render() {
+  const state = Store.getState();
+  const app = document.getElementById('app');
+  let html = renderHeader(state);
+  html += '<div class="app-main">';
+  switch (state.currentView) {
+    case 'problem': html += renderProblem(state); break;
+    case 'bill': html += renderBill(state); break;
+    case 'journal': html += renderJournal(state); break;
+    case 'protocol': html += renderProtocol(state); break;
+    case 'payments': html += renderPayments(state); break;
+    case 'ledger': html += renderLedger(state); break;
+    case 'account': html += renderAccount(state); break;
+    case 'governance': html += renderGovernance(state); break;
+  }
+  html += '</div>';
+  app.innerHTML = html;
+  mountHandlers(state);
+}
+
+function renderHeader(state) {
+  const v = state.currentView;
+  const tab = (id, label) => `<button class="header__tab ${v === id ? 'header__tab--active' : ''}" data-action="set-view" data-view="${id}">${label}</button>`;
+  const nd = nextDeadline(state);
+  return `<header class="header">
+    <div class="header__row1">
+      <div class="header__brand">
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"/></svg>
+        The E-FISCAL Machine <span class="badge badge--amber" style="margin-left:4px;">Phase 1 demo</span>
+      </div>
+      <div class="clock-widget">
+        <span class="clock-widget__time">${formatDateTime(state.simNow)}</span>
+        <button class="clock-widget__btn" data-action="clock-hours" data-hours="1">+1h</button>
+        <button class="clock-widget__btn" data-action="clock-bdays" data-days="1">+1 biz day</button>
+        <button class="clock-widget__btn" data-action="clock-next" ${nd ? '' : 'disabled'} title="${nd ? 'Next: ' + formatDateTime(nd) : 'no pending deadline'}">&raquo; next deadline</button>
+      </div>
+      <div class="header__actions">
+        <button class="header__btn header__btn--demo" data-action="start-guided-demo">&#9654; Guided Demo</button>
+        <button class="header__btn header__btn--danger" data-action="reset-demo">Reset</button>
+      </div>
+    </div>
+    <div class="header__row2">
+      <span class="header__group">Leg-text</span>
+      ${tab('problem', 'The Problem')}${tab('bill', 'The Bill')}${tab('journal', 'The Journal')}${tab('protocol', 'The Protocol')}
+      <span class="header__divider"></span>
+      <span class="header__group">Fiscal</span>
+      ${tab('payments', 'Payments')}${tab('ledger', 'The Ledger')}${tab('account', 'The Account')}
+      <span class="header__divider"></span>
+      ${tab('governance', 'Governance & Limits')}
+    </div>
+  </header>`;
+}
+
+/* ========== VIEW: THE PROBLEM ========== */
+function renderProblem(state) {
+  return `<div class="content-inner">
+    <h1 style="font-size:22px;font-weight:800;margin-bottom:4px;">The Translation Problem</h1>
+    <p class="text-muted mb-4" style="font-size:13.5px;">When Congress passes a spending law, it passes paragraphs of text. Before a dollar can move, someone must translate those paragraphs into what a financial system runs on — and today, all of that translation happens <strong>after the vote, outside the enacted text, by the executive branch</strong>.</p>
+
+    <div class="card card--flush mb-4">
+      <div class="card__header"><h3>How prose becomes payment today</h3><span class="text-sm text-muted">one row is enacted law — six are translation</span></div>
+      <div class="card__body">
+        <ol style="margin-left:18px;font-size:13px;line-height:1.7;">
+          <li><strong>Identity.</strong> Treasury assigns the account its code — the Treasury Account Symbol (below)</li>
+          <li><strong>On the books.</strong> Treasury issues a warrant crediting the account (FS Form 6200, electronic in CARS; the GAO countersignature was abolished in 1991)</li>
+          <li><strong>The schedule.</strong> OMB apportions on the SF-132 — written by presidential staff after the vote, and legally binding</li>
+          <li><strong>The internal split.</strong> The agency subdivides the schedule into allowances</li>
+          <li><strong>The commitment.</strong> The agency signs the contract — where spending law actually bites</li>
+          <li><strong>Payment.</strong> Nearly all federal cash sits in one pool — the government's account at the Federal Reserve; an appropriation "balance" is a ledger entitlement against it</li>
+          <li><strong>Reporting.</strong> Upward and outward, in the executive's own categories (DATA Act broker files → USAspending, monthly, after obligation)</li>
+        </ol>
+      </div>
+    </div>
+
+    <div class="grid-2 mb-4">
+      <div class="card" style="margin-bottom:0;">
+        <h3 style="font-size:14px;font-weight:700;margin-bottom:8px;">The text IS machine-readable — the money is not</h3>
+        <p class="text-sm mb-2">Enrolled bills and public laws have been published in <strong>USLM XML</strong> since the 113th Congress (GPO/OLRC, github.com/usgpo/uslm). But USLM has <strong>no fiscal elements</strong>: a dollar figure like "$41,455,000" is just a text node. No element carries an amount, an account, a period of availability, or budget authority.</p>
+        <p class="text-sm mb-2">The House Clerk's <strong>Comparative Print Suite</strong> (2022) already parses and <em>executes</em> amendments against structured law text. E-FISCAL extends that idea from text diffs to fiscal records.</p>
+        <p class="text-xs text-muted">Since 2022, OMB apportionments must post publicly within 2 business days (P.L. 117-103, Div. E &sect;204) — the first structured public fiscal act after enactment. The posting site was taken down in March 2025 and restored by court order that August: executive-held fiscal data is only as public as the executive keeps it.</p>
+      </div>
+      <div class="card card--flush" style="margin-bottom:0;">
+        <div class="card__header"><h3>The Treasury Account Symbol — 8 components</h3><span class="text-xs text-muted">assigned by Treasury in CARS, after enactment</span></div>
+        <div class="table-wrap"><table>
+          <thead><tr><th>Field</th><th>Len</th><th>What it says</th></tr></thead>
+          <tbody class="text-sm">
+            <tr><td>SP — Sub-level Prefix</td><td>2</td><td>Subdivision prefix</td></tr>
+            <tr><td>ATA — Allocation Transfer Agency</td><td>3</td><td>Only when another agency spends the owner's funds</td></tr>
+            <tr><td>AID — Agency Identifier</td><td>3</td><td>The owning agency</td></tr>
+            <tr><td>BPOA / EPOA — Availability years</td><td>4+4</td><td>First and last usable years</td></tr>
+            <tr><td>A — Availability Type</td><td>1</td><td>"X" = no-year (mutually exclusive with BPOA/EPOA)</td></tr>
+            <tr><td>MAIN — Main Account</td><td>4</td><td>The account; the number family reveals the fund type</td></tr>
+            <tr><td>SUB — Sub-Account</td><td>3</td><td>Optional finer split</td></tr>
+          </tbody>
+        </table></div>
+        <p class="text-xs text-muted" style="padding: 8px 20px;">The explainer's 6-row table simplifies; the canonical component TAS is 24 fixed-width characters across these 8 fields. None of them appear in the enacted bill — which is the point.</p>
+      </div>
+    </div>
+
+    <div class="grid-2 mb-4">
+      <div class="alert alert--info" style="margin-bottom:0;">
+        <strong>Exception one — appropriated, no schedule.</strong> The institutional Congress (House, Senate, committees, Members, officers, the Architect of the Capitol) is exempt from apportionment entirely — 31 U.S.C. &sect;1511(b)(3). Support agencies (GAO, LOC, CBO, GPO) self-apportion under &sect;1513(a). That empty seat is where this pilot lands.
+      </div>
+      <div class="alert alert--info" style="margin-bottom:0;">
+        <strong>Exception two — never touches the Treasury.</strong> The CFPB's Director requisitions from the Fed's combined earnings into a fund at the Fed — no Treasury account, no warrant, no annual review — audited by GAO and upheld 7-2 in 2024: a standing law naming a source, a purpose, and a cap IS an "Appropriation made by Law."
+      </div>
+    </div>
+
+    <div class="card">
+      <h3 style="font-size:14px;font-weight:700;margin-bottom:8px;">The fix — the one-page version</h3>
+      <ol style="margin-left:18px;font-size:13px;line-height:1.75;">
+        <li><strong>The problem.</strong> The executable version of every spending law is produced after enactment, by the executive. February 2025 showed what that costs.</li>
+        <li><strong>The fix.</strong> Enact the mechanical structure before the vote — amounts, dates, purposes, payees as labeled fields — with judgment calls named, clocked, and public.</li>
+        <li><strong>The safety.</strong> A pilot only: Congress's own money, existing payment rails, no executive funds ever without a new law, and expressly no central bank digital currency.</li>
+        <li><strong>The legal basis.</strong> The Journal and Statement-and-Account Clauses; the legislative branch's existing fiscal autonomy; funding on the model the Supreme Court upheld in 2024.</li>
+        <li><strong>The ask.</strong> Authorize the infrastructure, the three-year pilot, and an independent evaluation due a full year before sunset.</li>
+      </ol>
+      <button class="btn btn--primary mt-2" data-action="set-view" data-view="bill">Read the bill &rarr;</button>
+    </div>
+  </div>`;
+}
+
+/* ========== VIEW: THE BILL ========== */
+function getStepperState(bill) {
+  const s = bill.status;
+  const steps = [
+    { label: 'Committee', state: 'pending' },
+    { label: 'House Vote', state: 'pending' },
+    { label: 'Senate Vote', state: 'pending' },
+    { label: 'Presidential', state: 'pending' },
+    { label: 'Enacted', state: 'pending' }
+  ];
+  const idx = ['draft','in_committee'].includes(s) ? 0 :
+    ['house_floor','house_voting'].includes(s) ? 1 :
+    ['house_passed','house_failed','senate_floor','senate_voting'].includes(s) ? 2 :
+    ['senate_passed','senate_failed','presidential_review','signed','vetoed','veto_override_house','veto_override_senate'].includes(s) ? 3 :
+    s === 'enacted' ? 4 : 0;
+  for (let i = 0; i < 5; i++) {
+    if (i < idx) steps[i].state = 'done';
+    else if (i === idx) steps[i].state = 'active';
+  }
+  if (s === 'enacted') steps[4].state = 'done';
+  if (['house_failed','failed'].includes(s)) { steps[0].state = 'done'; steps[1].state = 'failed'; }
+  if (s === 'senate_failed') { steps[0].state = 'done'; steps[1].state = 'done'; steps[2].state = 'failed'; }
+  return steps;
+}
+function renderStepper(steps) {
+  return `<div class="stepper">${steps.map((st, i) => `
+    ${i > 0 ? `<div class="stepper__line ${st.state === 'done' || (steps[i-1] && steps[i-1].state === 'done') ? 'stepper__line--done' : ''}"></div>` : ''}
+    <div class="stepper__node">
+      <div class="stepper__circle stepper__circle--${st.state}">${st.state === 'done' ? '&#10003;' : st.state === 'failed' ? '&#10007;' : (i+1)}</div>
+      <div class="stepper__text stepper__text--${st.state}">${st.label}</div>
+    </div>
+  `).join('')}</div>`;
+}
+
+function renderFieldRows(line) {
+  const mech = (label, value) => `<div class="field-row field-row--mech"><span class="field-row__label">${label}</span><span class="field-row__value">${value}</span></div>`;
+  const judg = (label, value) => `<div class="field-row field-row--judg"><span class="field-row__label">${label}</span><span class="field-row__value">${value}</span></div>`;
+  const t = line.tas;
+  let html = '';
+  html += mech('Amount', formatExact(line.amount) + ' <span class="badge badge--amber">DRAFT [$]</span>');
+  if (line.installments.length > 1) {
+    html += mech('Installments', line.installments.map(i => `${formatExact(i.amount)} (${i.available ? 'available' : 'locked — ' + i.unlockedBy})`).join(' · '));
+  }
+  html += mech('Availability', line.availability.noYear ? 'no-year — until expended (Type X)' : `${line.availability.start} &rarr; ${line.availability.end}`);
+  html += mech('Purposes', line.purposeCodes.join(', '));
+  html += mech('Eligible payees', 'enacted list "' + line.payeeListId + '" (' + (PAYEE_LISTS[line.payeeListId] || []).length + ' entries)');
+  html += mech('Rail', line.rail === 'A' ? 'A — Treasury (chambers’ officers certify; Treasury processes as today)' : 'B — the Bank pays from the Congressional General Account');
+  html += mech('TAS (illustrative)', `${t.sp}-${t.ata || '&mdash;'}-${t.aid}-${line.availability.noYear ? 'X' : t.bpoa + '/' + t.epoa}-${t.main}-${t.sub}`);
+  for (const jf of line.judgmentFields) {
+    html += judg('Judgment: "' + jf.term + '"', escHtml(jf.quote) + ` &mdash; assigned to <strong>${escHtml(jf.officer)}</strong>, ${jf.clockBusinessDays} business days, silence deems approval`);
+  }
+  for (const m of line.milestones) {
+    html += mech('Milestone', `${escHtml(m.description)} &mdash; unlocks installment ${m.unlocksInstallment} (${m.status})`);
+  }
+  return html;
+}
+
+function renderBill(state) {
+  const bill = state.bill;
+  const tab = state.billTab;
+  return `<div class="content-inner">
+    <div class="flex items-center gap-2 mb-2" style="flex-wrap:wrap;">
+      <h1 style="font-size:20px;font-weight:800;">${escHtml(bill.title)}</h1>
+      <span class="badge ${statusBadgeClass(bill.status)}">${statusLabel(bill.status)}</span>
+      ${state.certified ? '<span class="badge badge--green">Certified into the Journal</span>' : ''}
+    </div>
+    <p class="text-sm text-muted mb-4">Electronic Fiscal Information, Statutory Codification and Automated Legislation. The bill carries the legislative text <em>and</em> an Annex that is the machine-readable schedule — enacted together; the printed text controls.</p>
+    <div class="tabs">
+      <button class="tab ${tab==='text'?'tab--active':''}" data-action="set-bill-tab" data-tab="text">Text</button>
+      <button class="tab ${tab==='annex'?'tab--active':''}" data-action="set-bill-tab" data-tab="annex">Annex — Formalized Schedule</button>
+      <button class="tab ${tab==='enact'?'tab--active':''}" data-action="set-bill-tab" data-tab="enact">Enactment</button>
+    </div>
+    ${tab === 'text' ? renderBillText(bill) : ''}
+    ${tab === 'annex' ? renderBillAnnex(state) : ''}
+    ${tab === 'enact' ? renderBillEnact(state) : ''}
+  </div>`;
+}
+function renderBillText(bill) {
+  return bill.sections.map(sec => `<div class="card" style="padding:16px 20px;">
+    <h3 style="font-size:13px;font-weight:800;margin-bottom:6px;">${escHtml(sec.heading)}</h3>
+    <p class="text-sm" style="line-height:1.7;">${escHtml(sec.prose)}</p>
+  </div>`).join('');
+}
+function renderBillAnnex(state) {
+  const annex = state.bill.annex;
+  return `<div>
+    <div class="draft-banner"><strong>All amounts are DRAFT placeholders</strong> — bracketed in the discussion draft, bracketed here. TAS digits are illustrative: today the real TAS is assigned by Treasury in CARS <em>after</em> enactment — closing that gap is what the Annex is for.</div>
+    ${annex.lines.map(line => `<div class="card" style="padding:16px 20px;">
+      <div class="flex justify-between items-center mb-2" style="flex-wrap:wrap;gap:6px;">
+        <h3 style="font-size:13.5px;font-weight:800;">${escHtml(line.name)}</h3>
+        <span class="text-sm"><strong>${formatCurrency(line.amount)}</strong> <span class="badge badge--amber">DRAFT</span></span>
+      </div>
+      <p class="text-xs text-muted mb-2" style="font-style:italic;">"${escHtml(line.enactedText)}"</p>
+      ${renderFieldRows(line)}
+    </div>`).join('')}
+    <div class="card" style="padding:14px 20px;">
+      <div class="flex items-center gap-2" style="flex-wrap:wrap;">
+        <span class="section-title" style="margin:0;">Fingerprint printed in the statute</span>
+        <span class="fingerprint">${annex.fingerprint}</span>
+        <span class="text-xs text-muted">demo hash (FNV-1a) — stands in for SHA-256. The printed text controls; the file is the same content in a second form, and anyone can verify the match.</span>
+      </div>
+    </div>
+    <div class="alert alert--info"><span style="background:var(--green-100);padding:1px 6px;border-radius:4px;font-weight:700;">green</span> = mechanical fields — the only things the machine ever evaluates. <span style="background:var(--amber-100);padding:1px 6px;border-radius:4px;font-weight:700;">amber</span> = judgment fields — marked in the text, assigned to a named officer, never touched by the machine.</div>
+  </div>`;
+}
+function renderBillEnact(state) {
+  const bill = state.bill;
+  const v = bill.votes;
+  const s = bill.status;
+  return `<div>
+    ${renderStepper(getStepperState(bill))}
+    ${renderCommitteeStage(bill, s)}
+    ${renderVoteSection(bill, 'house', v, s)}
+    ${renderVoteSection(bill, 'senate', v, s)}
+    ${renderPresidentialSection(bill, v, s)}
+    ${v.presidentialAction === 'vetoed' ? renderOverrideSection(bill, v, s) : ''}
+    ${s === 'enacted' && !state.certified ? `<div class="card mb-4">
+      <div class="card__header"><h3>Certification into the Journal</h3></div>
+      <div class="card__body">
+        <p class="text-sm mb-2">The bill is enacted. The <strong>Clerk of the House</strong> and the <strong>Secretary of the Senate</strong> — the officers who attest enrolled bills today — jointly certify the enacted formalization into the Journal, whose law record they hold.</p>
+        <button class="btn btn--success" data-action="certify-enactment">Certify the Enacted File into the Journal</button>
+      </div>
+    </div>` : ''}
+    ${state.certified ? '<div class="alert alert--success"><strong>Certified.</strong> The law is Journal entry #1 — the formalized schedule is now the operative record. Every line still runs in SHADOW until the Director and the Comptroller General certify readiness, line by line (Governance view).</div>' : ''}
+  </div>`;
+}
+function renderCommitteeStage(bill, status) {
+  const past = !['draft','in_committee'].includes(status);
+  return `<div class="card mb-4">
+    <div class="card__header"><h3>Committee of Jurisdiction</h3><span class="text-sm text-muted">referral &middot; markup &middot; report</span></div>
+    <div class="card__body">
+      <p class="text-xs text-muted mb-2">Appropriation bills originate in the House by longstanding custom and are shaped in committee before floor consideration.</p>
+      ${status === 'draft' ? `<button class="btn btn--primary" data-action="refer-committee">Refer to Committee</button>` : ''}
+      ${status === 'in_committee' ? `<div class="alert alert--info mb-2">Markup underway.</div><button class="btn btn--primary" data-action="report-bill">Report Bill to the House Floor</button>` : ''}
+      ${past ? '<div class="alert alert--success">Reported to the House floor.</div>' : ''}
+    </div>
+  </div>`;
+}
+function renderVoteSection(bill, chamber, votes, status) {
+  const isHouse = chamber === 'house';
+  const total = isHouse ? 435 : 100;
+  const label = isHouse ? 'House of Representatives' : 'United States Senate';
+  const count = isHouse ? votes.houseCount : votes.senateCount;
+  const cast = count ? count.yea + count.nay + count.present + count.absent : 0;
+  const needsCloture = !isHouse && status === 'house_passed' && !(votes.cloture && votes.cloture.invoked);
+  const canVote = isHouse ?
+    ['house_floor','house_voting'].includes(status) :
+    ['senate_floor','senate_voting'].includes(status);
+  const passed = majorityPassed(count);
+  const voteDone = cast >= total;
+  const needed = majorityNeeded(count);
+  const tied = voteDone && count && count.yea === count.nay && !votes.vpTieBreak;
+  return `<div class="card mb-4">
+    <div class="card__header"><h3>${label}</h3><span class="text-sm text-muted"><span id="${chamber}-cast">${cast}</span> / ${total} votes cast</span></div>
+    <div class="card__body">
+      <p class="text-xs text-muted mb-2">Passage requires a majority of Members present and voting (a quorum being present)${isHouse ? '' : ' — the Vice President breaks a tie'}.</p>
+      ${!isHouse && needsCloture ? `<div class="alert alert--warning mb-2"><strong>Cloture required.</strong> Most measures need 60 votes to end debate (Rule XXII).${votes.cloture && !votes.cloture.invoked ? ` Last motion failed ${votes.cloture.yea}&ndash;${votes.cloture.nay}.` : ''}</div>
+      <button class="btn btn--primary mb-2" data-action="file-cloture">File Cloture Motion (60 to proceed)</button>` : ''}
+      ${!isHouse && votes.cloture && votes.cloture.invoked ? `<p class="text-xs mb-2" style="color:var(--green-600);">Cloture invoked ${votes.cloture.yea}&ndash;${votes.cloture.nay}.</p>` : ''}
+      <div class="tally">
+        <div class="tally__counts">
+          <span style="color:var(--green-600)">Yea: <span id="${chamber}-yea-count">${count ? count.yea : 0}</span></span>
+          <span style="color:var(--red-600)">Nay: <span id="${chamber}-nay-count">${count ? count.nay : 0}</span></span>
+          <span style="color:var(--slate-500)">Other: <span id="${chamber}-other-count">${count ? count.present + count.absent : 0}</span></span>
+        </div>
+        <div class="tally__bar">
+          <div class="tally__yea" id="${chamber}-yea-bar" style="width:${count ? count.yea/total*100 : 0}%"></div>
+          <div class="tally__nay" id="${chamber}-nay-bar" style="width:${count ? count.nay/total*100 : 0}%"></div>
+          <div class="tally__other" id="${chamber}-other-bar" style="width:${count ? (count.present+count.absent)/total*100 : 0}%"></div>
+          <div class="tally__threshold" style="left:50%"><span class="tally__threshold-label">majority</span></div>
+        </div>
+      </div>
+      ${voteDone && !tied ? `<div class="alert ${passed ? 'alert--success' : 'alert--error'}">${passed ? 'PASSED' : 'FAILED'}: ${count.yea} yea, ${count.nay} nay &mdash; ${needed} of the ${count.yea + count.nay} voting needed${votes.vpTieBreak && !isHouse ? ' (incl. the Vice President’s tie-breaking vote)' : ''}</div>` : ''}
+      ${tied && !isHouse ? `<div class="alert alert--warning">TIED ${count.yea}&ndash;${count.nay}.</div><button class="btn btn--primary" data-action="vp-tiebreak">Vice President Votes Aye</button>` : ''}
+      ${tied && isHouse ? `<div class="alert alert--error">TIED — a tie vote fails in the House.</div>` : ''}
+      ${canVote && !voteDone ? `<button class="btn btn--primary" data-action="simulate-vote" data-chamber="${chamber}" ${voteAnimating ? 'disabled' : ''}>Simulate ${isHouse ? 'House' : 'Senate'} Vote</button>` : ''}
+    </div>
+  </div>`;
+}
+function renderPresidentialSection(bill, votes, status) {
+  if (!['senate_passed','presidential_review','signed','vetoed','veto_override_house','veto_override_senate','enacted'].includes(status)) return '';
+  return `<div class="card mb-4">
+    <div class="card__header"><h3>Presidential Action</h3></div>
+    <div class="card__body">
+      ${votes.presidentialAction === 'signed' ? '<div class="alert alert--success"><strong>President Signed</strong> the bill into law.</div>' : ''}
+      ${votes.presidentialAction === 'no_action' ? '<div class="alert alert--success"><strong>Became Law Without Signature</strong> — ten days passed with Congress in session (Art. I, &sect; 7).</div>' : ''}
+      ${votes.presidentialAction === 'vetoed' ? '<div class="alert alert--error"><strong>President Vetoed</strong> the bill.</div>' : ''}
+      ${!votes.presidentialAction ? `<p class="mb-2 text-sm">The bill has passed both chambers. Sign, veto, or let ten days pass.</p>
+        <div class="flex gap-2">
+          <button class="btn btn--success" data-action="sign-bill">Sign into Law</button>
+          <button class="btn btn--outline" data-action="no-action-bill">Let 10 Days Pass</button>
+          <button class="btn btn--danger" data-action="veto-bill">Veto</button>
+        </div>` : ''}
+    </div>
+  </div>`;
+}
+function renderOverrideSection(bill, votes, status) {
+  const chambers = [
+    { key: 'house', label: 'House Override Vote', total: 435, count: votes.vetoOverrideHouse, prefix: 'override-house' },
+    { key: 'senate', label: 'Senate Override Vote', total: 100, count: votes.vetoOverrideSenate, prefix: 'override-senate' }
+  ];
+  return chambers.map(ch => {
+    const count = ch.count;
+    const cast = count ? count.yea + count.nay + count.present + count.absent : 0;
+    const voteDone = cast >= ch.total;
+    const threshold = count && (count.yea + count.nay) > 0 ? overrideThreshold(count) : Math.ceil(ch.total * 2 / 3);
+    const passed = count && overridePassed(count);
+    const canVote = ch.key === 'house' ? ['vetoed','veto_override_house'].includes(status) && !votes.vetoOverrideHouse :
+      ['veto_override_house','veto_override_senate'].includes(status) && votes.vetoOverrideHouse && !votes.vetoOverrideSenate;
+    return `<div class="card mb-4">
+      <div class="card__header"><h3>${ch.label} (2/3 of those voting)</h3><span class="text-sm text-muted"><span id="${ch.prefix}-cast">${cast}</span> / ${ch.total} votes cast</span></div>
+      <div class="card__body">
+        <div class="tally">
+          <div class="tally__counts">
+            <span style="color:var(--green-600)">Yea: <span id="${ch.prefix}-yea-count">${count ? count.yea : 0}</span></span>
+            <span style="color:var(--red-600)">Nay: <span id="${ch.prefix}-nay-count">${count ? count.nay : 0}</span></span>
+            <span style="color:var(--slate-500)">Other: <span id="${ch.prefix}-other-count">${count ? count.present + count.absent : 0}</span></span>
+          </div>
+          <div class="tally__bar">
+            <div class="tally__yea" id="${ch.prefix}-yea-bar" style="width:${count ? count.yea/ch.total*100 : 0}%"></div>
+            <div class="tally__nay" id="${ch.prefix}-nay-bar" style="width:${count ? count.nay/ch.total*100 : 0}%"></div>
+            <div class="tally__other" id="${ch.prefix}-other-bar" style="width:${count ? (count.present+count.absent)/ch.total*100 : 0}%"></div>
+            <div class="tally__threshold" style="left:66.7%"><span class="tally__threshold-label">2/3</span></div>
+          </div>
+        </div>
+        ${voteDone ? `<div class="alert ${passed ? 'alert--success' : 'alert--error'}">${passed ? 'OVERRIDE PASSED' : 'OVERRIDE FAILED'}: ${count.yea} yea, ${count.nay} nay &mdash; ${threshold} of the ${count.yea + count.nay} voting needed</div>` : ''}
+        ${canVote && !voteDone ? `<button class="btn btn--primary" data-action="simulate-override" data-chamber="${ch.key}" ${voteAnimating ? 'disabled' : ''}>Simulate ${ch.key === 'house' ? 'House' : 'Senate'} Override</button>` : ''}
+      </div>
+    </div>`;
+  }).join('');
+}
+
+/* ========== VIEW: THE JOURNAL ========== */
+const KIND_BADGES = {
+  law: 'badge--purple', certification: 'badge--purple', 'readiness-cert': 'badge--blue',
+  commitment: 'badge--blue', request: 'badge--slate', check: 'badge--amber', warrant: 'badge--green',
+  payment: 'badge--green', adjudication: 'badge--amber', brake: 'badge--red', 'brake-release': 'badge--slate',
+  requisition: 'badge--orange', credit: 'badge--orange', 'milestone-cert': 'badge--blue',
+  reconciliation: 'badge--slate', discrepancy: 'badge--amber', note: 'badge--red'
+};
+function entrySummary(e) {
+  const p = e.payload;
+  switch (e.kind) {
+    case 'law': return `Enacted law certified — fingerprint ${p.fingerprint} — by ${p.certifiedBy.join(' + ')}`;
+    case 'certification': return p.note;
+    case 'readiness-cert': return `Line ${p.lineId} certified out of shadow by ${p.certifiedBy.join(' + ')}`;
+    case 'commitment': return (p.refused ? 'REFUSED commitment — ' : 'Commitment — ') + `${formatExact(p.amount)} · ${p.contractor} · ${p.description}`;
+    case 'request': return `Payment request ${formatExact(p.amount)} · invoice ${p.invoiceNo} · pays down commitment #${p.commitmentRef}`;
+    case 'check': return `Conformity check → ${p.outcome}` + (p.outcome === 'FLAG' ? ` ("${p.flag.term}" — ${p.flag.adjudicator}, due ${formatDateTime(p.flag.deadline)})` : '');
+    case 'warrant': return `Warrant issued ${p.deemed ? 'by operation of law (silence deemed approval)' : 'automatically'} — ${formatExact(p.amount)} — not money; orders no one`;
+    case 'payment': return `PAID ${formatExact(p.amount)} on Rail ${p.rail} — certified by ${p.certifiedBy.split('(')[0].trim()}`;
+    case 'adjudication': return `Judgment ${p.decision.toUpperCase()}${p.deemed ? ' (deemed by silence)' : ''} — ${p.decidedBy}`;
+    case 'brake': return p.renewed ? `BRAKE RENEWED — expires ${formatDateTime(p.expiresAt)}` : `BRAKE PULLED (${p.holdersSigned.length} of 4) on ${p.lineId || 'all lines'} — ${p.reasons}`;
+    case 'brake-release': return `Brake released — ${p.reason}`;
+    case 'requisition': return `Council requisition ${formatExact(p.amount)} — basis: ${p.basis}`;
+    case 'credit': return `Bank credited the Account ${formatExact(p.amount)} — special obligation arises by operation of the statute`;
+    case 'milestone-cert': return `${p.certifier} certified: ${p.description} → installment ${p.unlockedInstallment} unlocked automatically`;
+    case 'reconciliation': return `Reconciled old-way payment ${formatExact(p.amount)} (paid ${formatDateTime(p.at)} while system was down)`;
+    case 'note': return p.note;
+    default: return e.kind;
+  }
+}
+function renderJournal(state) {
+  const filter = state.journalFilter;
+  const kinds = ['all', 'law', 'commitment', 'request', 'check', 'warrant', 'payment', 'adjudication', 'brake', 'requisition', 'credit', 'note'];
+  const entries = state.journal.filter(e => filter === 'all' || e.kind === filter || (filter === 'brake' && e.kind === 'brake-release'));
+  return `<div class="content-inner">
+    <div class="flex items-center gap-2 mb-2" style="flex-wrap:wrap;">
+      <h1 style="font-size:20px;font-weight:800;">The Journal</h1>
+      <span class="badge badge--slate">append-only</span>
+      <span class="badge badge--slate">${state.journal.length} entries</span>
+    </div>
+    <p class="text-sm text-muted mb-4">A permanent public record: pages are added, never torn out or rewritten. Every item carries two dates — written and entered — and the whole chain is public within 24 hours. Constitutionally, this is Congress keeping its Journal and publishing its Statement and Account (Art. I, &sect;5, cl. 3; &sect;9, cl. 7).</p>
+    <div class="flex gap-1 mb-4" style="flex-wrap:wrap;">
+      ${kinds.map(k => `<button class="btn btn--xs ${filter === k ? 'btn--primary' : 'btn--outline'}" data-action="journal-filter" data-filter="${k}">${k}</button>`).join('')}
+    </div>
+    <div class="card card--flush mb-4">
+      <div class="table-wrap"><table>
+        <thead><tr><th>#</th><th>Kind</th><th>Written / Entered</th><th>Public</th><th>Line</th><th>Summary</th></tr></thead>
+        <tbody>
+          ${entries.length === 0 ? '<tr><td colspan="6" class="text-sm text-muted">No entries yet. Enact and certify the bill first.</td></tr>' : ''}
+          ${entries.map(e => {
+            const pub = isPublic(e, state.simNow);
+            const selected = state.selectedEntrySeq === e.seq;
+            return `<tr style="cursor:pointer;" data-action="select-entry" data-seq="${e.seq}">
+              <td class="text-sm" style="font-family:var(--font-mono);">${e.seq}<span class="text-xs text-muted">·v${e.version}</span></td>
+              <td><span class="badge ${KIND_BADGES[e.kind] || 'badge--slate'}">${e.kind}</span></td>
+              <td class="text-xs">${formatDateTime(e.writtenAt)}</td>
+              <td>${pub ? '<span class="badge badge--green">PUBLIC</span>' : `<span class="badge badge--amber">EMBARGOED</span>`}</td>
+              <td class="text-xs">${e.lineId || '&mdash;'}</td>
+              <td class="text-sm">${escHtml(entrySummary(e))}</td>
+            </tr>
+            ${selected ? `<tr class="expanded-row"><td colspan="6">
+              <div style="padding:10px;">
+                <div class="section-title">Chain — back to the law</div>
+                <div class="chain">${chainFor(state.journal, e.seq).map(c => `<span class="chain__node">#${c.seq} ${c.kind}</span>`).join('<span class="chain__sep">&larr;</span>')}</div>
+                <div class="section-title mt-2">Payload</div>
+                <pre class="bill-text" style="max-height:180px;">${escHtml(JSON.stringify(e.payload, null, 2))}</pre>
+              </div>
+            </td></tr>` : ''}`;
+          }).join('')}
+        </tbody>
+      </table></div>
+    </div>
+    ${renderStudyCopies(state)}
+  </div>`;
+}
+function renderStudyCopies(state) {
+  const sel = state.studyCopies.find(sc => sc.id === state.selectedStudyCopyId) || state.studyCopies[0];
+  return `<div class="card card--flush">
+    <div class="card__header"><h3>Study Copies</h3><span class="text-sm text-muted">old prose laws rendered into the grammar — operative for nothing</span></div>
+    <div class="card__body">
+      <div class="flex gap-1 mb-2" style="flex-wrap:wrap;">
+        ${state.studyCopies.map(sc => `<button class="btn btn--xs ${sc.id === sel.id ? 'btn--primary' : 'btn--outline'}" data-action="select-study-copy" data-id="${sc.id}">${escHtml(sc.sourceLabel.split('(')[1].replace(')', ''))}</button>`).join('')}
+      </div>
+      <div class="flex items-center gap-2 mb-2"><span class="stamp">${sel.stamp}</span><span class="text-xs text-muted">${escHtml(sel.sourceLabel)} &mdash; same standing as an editorial U.S. Code volume</span></div>
+      <div class="grid-2">
+        <div>
+          <div class="section-title">The prose (as enacted, 2024)</div>
+          <pre class="bill-text" style="max-height:200px;">${escHtml(sel.prose)}</pre>
+        </div>
+        <div>
+          <div class="section-title">Formalized (afterward, non-operative)</div>
+          ${sel.formalizedLines.map(f => `<div class="field-row field-row--mech"><span class="field-row__label">${escHtml(f.label)}</span><span class="field-row__value">${formatExact(f.amount)} &middot; ${escHtml(f.availability)}</span></div>`).join('')}
+        </div>
+      </div>
+      <div class="section-title mt-4">Discrepancy report — what could not be made mechanical</div>
+      <div class="table-wrap"><table>
+        <thead><tr><th>Provision</th><th>Why not mechanical</th><th>Judgment field used</th><th>Assigned officer</th></tr></thead>
+        <tbody class="text-sm">
+          ${sel.discrepancyReport.map(d => `<tr><td style="font-style:italic;">${escHtml(d.provision)}</td><td>${escHtml(d.whyNotMechanical)}</td><td>${escHtml(d.judgmentFieldUsed)}</td><td>${escHtml(d.assignedOfficer)}</td></tr>`).join('')}
+        </tbody>
+      </table></div>
+      <p class="text-xs text-muted mt-2">Delivered to the Appropriations Committees as drafting feedback, with a preview period and the committees' response printed inside. Never a ranking, never a scorecard.</p>
+    </div>
+  </div>`;
+}
+
+/* ========== VIEW: THE PROTOCOL ========== */
+const EIGHT_QUESTIONS = [
+  { n: 1, q: 'Does this appropriation exist?', live: true },
+  { n: 2, q: 'How much remains on it?', live: true },
+  { n: 3, q: 'What is its period of availability?', live: false },
+  { n: 4, q: 'Is this recipient on the enacted list?', live: true },
+  { n: 5, q: 'What judgment fields does it carry, and whose are they?', live: false },
+  { n: 6, q: 'What requests are pending against it?', live: false },
+  { n: 7, q: 'What has been refused, and why?', live: false },
+  { n: 8, q: 'Show the chain from this payment back to the law.', live: true }
+];
+function renderProtocol(state) {
+  const line = lineById(state, state.selectedLineId) || state.bill.annex.lines[0];
+  const ledger = deriveLedger(state.journal, state.bill.annex.lines);
+  const L = ledger.lines[line.id];
+  const lastPayment = [...state.journal].reverse().find(e => e.kind === 'payment');
+  return `<div class="content-inner">
+    <h1 style="font-size:20px;font-weight:800;margin-bottom:4px;">The Protocol</h1>
+    <p class="text-sm text-muted mb-4">The public rulebook: the grammar the laws are written in, the questions anyone may ask, and who may write which entries. Free, with test tools. Changes require public comment — and any change that would alter what a law <em>means</em> requires a new law, with that line drawn mechanically.</p>
+    <div class="card card--flush mb-4">
+      <div class="card__header"><h3>The grammar — schema v${state.bill.annex.schemaVersion}</h3></div>
+      <div class="table-wrap"><table>
+        <thead><tr><th>Field</th><th>Type</th><th>Class</th></tr></thead>
+        <tbody class="text-sm">
+          <tr><td>amount / installments</td><td>integer cents (draft-bracketed)</td><td><span class="badge badge--green">mechanical</span></td></tr>
+          <tr><td>availability (BPOA/EPOA or Type X)</td><td>date window | no-year</td><td><span class="badge badge--green">mechanical</span></td></tr>
+          <tr><td>purposeCodes</td><td>enacted enumeration</td><td><span class="badge badge--green">mechanical</span></td></tr>
+          <tr><td>payeeList</td><td>enacted enumeration</td><td><span class="badge badge--green">mechanical</span></td></tr>
+          <tr><td>judgmentFields[]</td><td>term + named officer + clock</td><td><span class="badge badge--amber">judgment — machine never evaluates</span></td></tr>
+          <tr><td>milestones[]</td><td>certifier + unlock target</td><td><span class="badge badge--green">mechanical once certified</span></td></tr>
+        </tbody>
+      </table></div>
+    </div>
+    <div class="card mb-4">
+      <div class="card__header" style="padding:0 0 10px;"><h3>The eight questions</h3><span class="text-sm text-muted">four are live buttons in this demo; the rest render the same way</span></div>
+      ${EIGHT_QUESTIONS.map(q => `<div class="flex items-center gap-2 mb-2" style="font-size:13px;">
+        <span class="badge badge--slate">Q${q.n}</span>
+        <span style="flex:1;">${escHtml(q.q)}</span>
+        ${q.live ? `<button class="btn btn--xs btn--outline" data-action="ask-question" data-q="${q.n}">ask</button>` : '<span class="text-xs text-muted">copy</span>'}
+      </div>`).join('')}
+      <div id="protocol-answer" class="alert alert--info hidden"></div>
+      <div class="text-xs text-muted">Selected line for queries: <select id="protocol-line" class="form-select" style="width:auto;display:inline-block;padding:2px 8px;font-size:12px;">${state.bill.annex.lines.map(l => `<option value="${l.id}" ${l.id === line.id ? 'selected' : ''}>${escHtml(l.name)}</option>`).join('')}</select>
+      &nbsp; remaining now: <strong>${formatExact(Math.max(0, L.remaining))}</strong>${lastPayment ? ` &nbsp;&middot;&nbsp; last payment: entry #${lastPayment.seq}` : ''}</div>
+    </div>
+    <div class="card card--flush">
+      <div class="card__header"><h3>Who may write which entries</h3></div>
+      <div class="table-wrap"><table>
+        <thead><tr><th>Entry kind</th><th>Written by</th></tr></thead>
+        <tbody class="text-sm">
+          <tr><td>law, certification</td><td>Clerk of the House + Secretary of the Senate (jointly)</td></tr>
+          <tr><td>check, warrant</td><td><strong>the machine only</strong> — no human can issue or withhold a warrant</td></tr>
+          <tr><td>commitment, request</td><td>the spending office's certifying officer</td></tr>
+          <tr><td>adjudication</td><td>the one named GAO adjudicator (or operation of law, by silence)</td></tr>
+          <tr><td>brake / brake-release</td><td>3 of 4 Appropriations principals</td></tr>
+          <tr><td>requisition / credit</td><td>the Council (3 votes) / the Bank (records only — janitor rule)</td></tr>
+          <tr><td>readiness-cert, milestone-cert</td><td>Director + Comptroller General / the named certifier</td></tr>
+        </tbody>
+      </table></div>
+    </div>
+  </div>`;
+}
+
+/* ========== VIEW: PAYMENTS ========== */
+function railStage(state) {
+  // Highlight the furthest stage reached in the journal (for the diagram).
+  const has = k => state.journal.some(e => e.kind === k);
+  if (has('payment')) return 6;
+  if (has('warrant')) return 4;
+  if (has('check')) return 3;
+  if (has('commitment')) return 2;
+  if (state.certified) return 1;
+  if (state.bill.status === 'enacted') return 0;
+  return -1;
+}
+function renderPayments(state) {
+  const stage = railStage(state);
+  const flags = pendingFlags(state.journal);
+  const warrants = warrantsAwaitingPayment(state.journal);
+  const ledger = deriveLedger(state.journal, state.bill.annex.lines);
+  const fc = formState.commitment;
+  const fr = formState.request;
+  const commitLine = lineById(state, fc.lineId);
+  const reqLine = lineById(state, fr.lineId);
+  const reqCommitments = reqLine ? (ledger.lines[reqLine.id].perCommitment || []) : [];
+  const step = (n, title, body) => `<div class="rail-step ${stage === n ? 'rail-step--active' : ''}"><span class="step-n">${n}</span><strong>${title}</strong> — ${body}</div>`;
+  return `<div class="content-inner">
+    <h1 style="font-size:20px;font-weight:800;margin-bottom:4px;">A Payment's Life — on Two Rails</h1>
+    <p class="text-sm text-muted mb-4">Congress's own money &middot; every step public &middot; the drawee differs, nothing else does. Neither rail is new: Treasury's systems and the Fed's systems run as they exist — used, never replaced.</p>
+    ${state.brake.active ? `<div class="alert alert--error"><strong>BRAKE PULLED</strong> on ${state.brake.lineId || 'all lines'} (${state.brake.holders.length} of 4 principals) — new requests suspended; expires ${formatDateTime(state.brake.expiresAt)} unless renewed; payments in flight are never touched. Reasons: ${escHtml(state.brake.reasons)}</div>` : ''}
+    ${state.floor.systemDown ? `<div class="alert alert--warning"><strong>SYSTEM DOWN (the floor).</strong> Payments proceed the old way and reconcile after — at no time shall the machine's operation or non-operation delay or prevent the payment of any amount lawfully due. Old-way queue: ${state.floor.oldWayPayments.length}.</div>` : ''}
+    <div class="card mb-4"><div class="rail-flow">
+      ${step(0, 'ENACT', 'the schedule is enacted in machine-readable form as part of the bill; its fingerprint printed in the statute')}
+      ${step(1, 'CERTIFY THE FILE', 'the Clerk and the Secretary certify the enacted formalization into the Journal')}
+      ${step(2, 'COMMIT, THEN REQUEST', 'checked at contract-signing — where spending law actually bites — and each request declares which commitment it pays down')}
+      ${step(3, 'CONFORMITY CHECK', 'published, re-runnable code: enough left, right purpose, inside the window, eligible recipient, no duplicate')}
+      ${step(4, 'WARRANT', 'issues automatically on a pass — not money; orders no one')}
+      <div class="rail-split">
+        <div class="rail-a"><strong>5A — RAIL ONE: TREASURY.</strong> The chambers' disbursing officers certify (2 U.S.C. &sect;&sect;5309, 1907); Treasury processes exactly as today — pay only against a warrant, and pay every warranted payment.</div>
+        <div class="rail-b"><strong>5B — RAIL TWO: THE FED.</strong> The comparison line and the machine's own money: the Bank pays from the Congressional General Account. No Treasury officer involved.</div>
+      </div>
+      ${step(6, 'PUBLIC, SETTLED, RECOMPUTED', 'the whole chain is public within 24 hours; anyone re-derives the Ledger to the penny')}
+    </div></div>
+
+    <div class="grid-2 mb-4">
+      <div class="card" style="margin-bottom:0;">
+        <div class="card__header" style="padding:0 0 10px;"><h3>1 &middot; New commitment</h3><span class="text-xs text-muted">contract award — checked here too</span></div>
+        <div class="form-group"><label class="form-label">Line</label>
+          <select class="form-select" id="commit-line">${state.bill.annex.lines.map(l => `<option value="${l.id}" ${fc.lineId === l.id ? 'selected' : ''}>${escHtml(l.name)}</option>`).join('')}</select></div>
+        <div class="form-row">
+          <div class="form-group"><label class="form-label">Amount ($)</label><input class="form-input" id="commit-amount" type="number" value="${fc.amount}" placeholder="e.g. 120000"></div>
+          <div class="form-group"><label class="form-label">Purpose</label>
+            <select class="form-select" id="commit-purpose">${(commitLine ? commitLine.purposeCodes : []).map(p => `<option value="${p}" ${fc.purposeCode === p ? 'selected' : ''}>${p}</option>`).join('')}</select></div>
+        </div>
+        <div class="form-row">
+          <div class="form-group"><label class="form-label">Contractor</label><input class="form-input" id="commit-contractor" value="${escHtml(fc.contractor)}" placeholder="who we're contracting with"></div>
+          <div class="form-group"><label class="form-label">Description</label><input class="form-input" id="commit-desc" value="${escHtml(fc.description)}" placeholder="what for"></div>
+        </div>
+        <button class="btn btn--primary" data-action="submit-commitment">Sign Contract (Commit)</button>
+      </div>
+      <div class="card" style="margin-bottom:0;">
+        <div class="card__header" style="padding:0 0 10px;"><h3>2 &middot; New payment request</h3><span class="text-xs text-muted">declares the commitment it pays down</span></div>
+        <div class="form-row">
+          <div class="form-group"><label class="form-label">Line</label>
+            <select class="form-select" id="req-line">${state.bill.annex.lines.map(l => `<option value="${l.id}" ${fr.lineId === l.id ? 'selected' : ''}>${escHtml(l.name)}</option>`).join('')}</select></div>
+          <div class="form-group"><label class="form-label">Commitment</label>
+            <select class="form-select" id="req-commitment">${reqCommitments.length ? reqCommitments.map(c => `<option value="${c.seq}" ${String(fr.commitmentRef) === String(c.seq) ? 'selected' : ''}>#${c.seq} ${escHtml(c.contractor)} (${formatExact(c.open)} open)</option>`).join('') : '<option value="">no commitments on this line yet</option>'}</select></div>
+        </div>
+        <div class="form-row">
+          <div class="form-group"><label class="form-label">Payee</label>
+            <select class="form-select" id="req-payee">${(reqLine ? PAYEE_LISTS[reqLine.payeeListId] : []).map(p => `<option value="${p.id}" ${fr.payeeId === p.id ? 'selected' : ''}>${escHtml(p.name)}</option>`).join('')}</select></div>
+          <div class="form-group"><label class="form-label">Purpose</label>
+            <select class="form-select" id="req-purpose">${(reqLine ? reqLine.purposeCodes : []).map(p => `<option value="${p}" ${fr.purposeCode === p ? 'selected' : ''}>${p}</option>`).join('')}</select></div>
+        </div>
+        <div class="form-row">
+          <div class="form-group"><label class="form-label">Amount ($)</label><input class="form-input" id="req-amount" type="number" value="${fr.amount}" placeholder="e.g. 40000"></div>
+          <div class="form-group"><label class="form-label">Invoice #</label><input class="form-input" id="req-invoice" value="${escHtml(fr.invoiceNo)}" placeholder="e.g. INV-001"></div>
+        </div>
+        <button class="btn btn--success" data-action="submit-request">Submit Request (Run the Check)</button>
+      </div>
+    </div>
+
+    ${renderLatestCheck(state)}
+
+    ${flags.length ? `<div class="card card--flush mb-4">
+      <div class="card__header"><h3>Pending judgment flags</h3><span class="text-sm text-muted">one named adjudicator &middot; written reasons &middot; silence deems approval</span></div>
+      <div class="card__body">
+        ${flags.map(f => {
+          const overdueIn = (new Date(f.payload.flag.deadline) - new Date(state.simNow)) / 3600000;
+          return `<div class="alert alert--warning" style="margin-bottom:10px;">
+            <div class="mb-2"><strong>"${f.payload.flag.term}"</strong> — ${escHtml(f.payload.flag.quote)}<br>
+            <span class="text-xs">Adjudicator: ${escHtml(f.payload.flag.adjudicator)} &middot; due ${formatDateTime(f.payload.flag.deadline)} (${overdueIn > 0 ? Math.round(overdueIn) + 'h from now' : 'OVERDUE'}) &middot; amount ${formatExact(reqAmountForCheck(state.journal, f))}${f.payload.flag.largeAmount ? ' &middot; <strong>overseers pinged (clock not paused)</strong>' : ''}</span></div>
+            <div class="form-group"><input class="form-input adj-reason" data-seq="${f.seq}" placeholder="written reasons (required; a denial must cite the exact enacted term)" value="${escHtml(formState.adjReasons[f.seq] || '')}"></div>
+            <div class="flex gap-2">
+              <button class="btn btn--success btn--sm" data-action="adjudicate" data-seq="${f.seq}" data-decision="approve">Approve, in writing</button>
+              <button class="btn btn--danger btn--sm" data-action="adjudicate" data-seq="${f.seq}" data-decision="deny">Deny, citing the term</button>
+            </div>
+          </div>`;
+        }).join('')}
+      </div>
+    </div>` : ''}
+
+    ${warrants.length ? `<div class="card card--flush mb-4">
+      <div class="card__header"><h3>Warrants awaiting payment</h3><span class="text-sm text-muted">pay only against a warrant — and pay every warranted payment</span></div>
+      <div class="table-wrap"><table>
+        <thead><tr><th>#</th><th>Line</th><th>Amount</th><th>Rail</th><th></th></tr></thead>
+        <tbody class="text-sm">${warrants.map(w => {
+          const line = lineById(state, w.lineId);
+          return `<tr><td>#${w.seq}</td><td>${escHtml(line ? line.name : w.lineId)}</td><td>${formatExact(w.payload.amount)}</td><td>${line ? line.rail : ''}</td>
+          <td><button class="btn btn--success btn--xs" data-action="execute-payment" data-seq="${w.seq}">Pay (Rail ${line ? line.rail : 'A'})</button></td></tr>`;
+        }).join('')}</tbody>
+      </table></div>
+    </div>` : ''}
+
+    ${state.oversightPings.length ? `<div class="card card--flush mb-4">
+      <div class="card__header"><h3>Oversight pings</h3><span class="text-sm text-muted">large flagged amounts — real time, without pausing the clock (threshold illustrative)</span></div>
+      <div class="card__body text-sm">${state.oversightPings.map(p => `<div class="mb-2">&#128276; ${formatDateTime(p.at)} — check #${p.checkRef}, ${formatExact(p.amount)} &rarr; ${escHtml(p.sentTo)}</div>`).join('')}</div>
+    </div>` : ''}
+  </div>`;
+}
+function renderLatestCheck(state) {
+  const check = [...state.journal].reverse().find(e => e.kind === 'check');
+  const note = [...state.journal].reverse().find(e => e.kind === 'note');
+  const latest = check && note ? (check.seq > note.seq ? check : note) : (check || note);
+  if (!latest) return '';
+  if (latest.kind === 'note') {
+    return `<div class="alert alert--error mb-4"><strong>Refused (not a conformity violation):</strong> ${escHtml(latest.payload.note)}</div>`;
+  }
+  const p = latest.payload;
+  const cls = p.outcome === 'PASS' ? 'alert--success' : p.outcome === 'VIOLATION' ? 'alert--error' : 'alert--warning';
+  return `<div class="card card--flush mb-4">
+    <div class="card__header"><h3>Latest conformity check — entry #${latest.seq}</h3><span class="badge ${p.outcome === 'PASS' ? 'badge--green' : p.outcome === 'VIOLATION' ? 'badge--red' : 'badge--amber'}">${p.outcome}</span></div>
+    <div class="card__body">
+      ${p.tests.map(t => `<div class="check-test check-test--${t.pass ? 'pass' : 'fail'}"><span class="check-test__icon">${t.pass ? '&#10003;' : '&#10007;'}</span><span style="min-width:130px;font-weight:600;">${t.id}</span><span class="text-muted">${escHtml(t.detail)}</span></div>`).join('')}
+      ${p.outcome === 'PASS' ? '<div class="alert alert--success mt-2" style="margin-bottom:0;">Warrant issued <strong>automatically</strong> — no human touched it, and none could. (A warrant is not money and orders no one.)</div>' : ''}
+      ${p.outcome === 'VIOLATION' ? `<div class="alert alert--error mt-2" style="margin-bottom:0;"><strong>Refused automatically, with reasons — fixable, never waivable.</strong> The exact enacted term violated:<br><em>"${escHtml(p.citedTerm)}"</em></div>` : ''}
+      ${p.outcome === 'FLAG' ? `<div class="alert alert--warning mt-2" style="margin-bottom:0;"><strong>Judgment call — the machine never touches it.</strong> Routed to ${escHtml(p.flag.adjudicator)}; due ${formatDateTime(p.flag.deadline)}; silence deems approval — silence can never be a way to sit on lawful money.</div>` : ''}
+    </div>
+  </div>`;
+}
+
+/* ========== VIEW: THE LEDGER ========== */
+function renderLedger(state) {
+  const ledger = deriveLedger(state.journal, state.bill.annex.lines);
+  const t = ledger.totals;
+  const stat = (label, v, hint) => `<div class="card"><div class="text-xs text-muted">${label}</div><div style="font-size:19px;font-weight:800;margin:2px 0;">${formatExact(v)}</div><div class="text-xs text-muted">${hint}</div></div>`;
+  return `<div class="content-inner">
+    <div class="flex items-center gap-2 mb-2"><h1 style="font-size:20px;font-weight:800;">The Ledger</h1><span class="badge badge--slate">derived — no authority of its own</span></div>
+    <p class="text-sm text-muted mb-4">The running balances — provided, committed, paid, remaining — calculated from the Journal by a published recipe. You don't have to trust the office or the software. You can check.</p>
+    <div class="stat-grid">
+      ${stat('Provided', t.provided, 'available installments on enacted lines')}
+      ${stat('Committed', t.committed, 'contracts signed — where law bites')}
+      ${stat('Paid', t.paid, 'warranted payments + reconciliations')}
+      ${stat('Remaining', t.remaining, 'provided − committed (unobligated)')}
+    </div>
+    <div class="card card--flush mb-4">
+      <div class="card__header"><h3>By line</h3></div>
+      <div class="table-wrap"><table>
+        <thead><tr><th>Line</th><th class="text-right">Provided</th><th class="text-right">Committed</th><th class="text-right">Paid</th><th class="text-right">Remaining</th><th class="text-right">Open obligations</th></tr></thead>
+        <tbody class="text-sm">
+          ${state.bill.annex.lines.map(l => {
+            const L = ledger.lines[l.id];
+            return `<tr><td>${escHtml(l.name)}${state.readiness[l.id].mode === 'shadow' ? ' <span class="badge badge--slate">shadow</span>' : ''}</td>
+              <td class="text-right">${formatExact(L.provided)}</td><td class="text-right">${formatExact(L.committed)}</td>
+              <td class="text-right">${formatExact(L.paid)}</td><td class="text-right">${formatExact(L.remaining)}</td><td class="text-right">${formatExact(L.open)}</td></tr>
+            ${L.perCommitment.map(c => `<tr class="text-xs" style="color:var(--slate-500);"><td style="padding-left:28px;">#${c.seq} ${escHtml(c.contractor)} — ${escHtml(c.description)}</td><td class="text-right">&mdash;</td><td class="text-right">${formatExact(c.committed)}</td><td class="text-right">${formatExact(c.paidDown)}</td><td class="text-right">&mdash;</td><td class="text-right">${formatExact(c.open)}</td></tr>`).join('')}`;
+          }).join('')}
+        </tbody>
+      </table></div>
+    </div>
+    <div class="card">
+      <div class="card__header" style="padding:0 0 10px;"><h3>Outside reconstruction</h3><span class="text-sm text-muted">independent teams rebuild the Ledger from the public record</span></div>
+      <div class="grid-2">
+        <div>
+          <div class="section-title">The published recipe</div>
+          <pre class="recipe">${LEDGER_RECIPE}</pre>
+        </div>
+        <div>
+          <button class="btn btn--primary mb-2" data-action="run-reconstruction">Re-run the Recipe</button>
+          ${state.reconstruction ? `<div class="alert ${state.reconstruction.match ? 'alert--success' : 'alert--error'}">
+            <strong>${state.reconstruction.match ? 'MATCH — to the penny.' : 'MISMATCH'}</strong>
+            <div class="text-xs mt-2">official: provided ${formatExact(state.reconstruction.officialTotals.provided)}, committed ${formatExact(state.reconstruction.officialTotals.committed)}, paid ${formatExact(state.reconstruction.officialTotals.paid)}<br>
+            rebuilt: provided ${formatExact(state.reconstruction.rebuiltTotals.provided)}, committed ${formatExact(state.reconstruction.rebuiltTotals.committed)}, paid ${formatExact(state.reconstruction.rebuiltTotals.paid)}</div>
+          </div>` : '<p class="text-xs text-muted">Runs the same pure function over a fresh copy of the public Journal and compares every number.</p>'}
+        </div>
+      </div>
+    </div>
+  </div>`;
+}
+
+/* ========== VIEW: THE ACCOUNT ========== */
+function renderAccount(state) {
+  const fq = formState.requisition;
+  const railB = state.journal.filter(e => e.kind === 'payment' && e.payload.rail === 'B');
+  return `<div class="content-inner">
+    <h1 style="font-size:20px;font-weight:800;margin-bottom:4px;">The Machine's Own Money</h1>
+    <p class="text-sm text-muted mb-4">A Congressional General Account at the Federal Reserve Bank of New York, with the Bank as the branch's banker under a duty not to refuse, delay, or condition. The fisc funds itself, on the record.</p>
+    <div class="stat-grid" style="grid-template-columns:repeat(3,1fr);">
+      <div class="card"><div class="text-xs text-muted">Account balance (at FRBNY)</div><div style="font-size:19px;font-weight:800;margin:2px 0;">${formatExact(state.account.balance)}</div><div class="text-xs text-muted">janitor rule: the Bank holds no key</div></div>
+      <div class="card"><div class="text-xs text-muted">Special obligation outstanding</div><div style="font-size:19px;font-weight:800;margin:2px 0;">${formatExact(state.account.obligationOutstanding)}</div><div class="text-xs text-muted">outside the debt limit &middot; pays ${escHtml(state.account.rateLabel)}</div></div>
+      <div class="card"><div class="text-xs text-muted">Rail B payments made</div><div style="font-size:19px;font-weight:800;margin:2px 0;">${railB.length}</div><div class="text-xs text-muted">the comparison line, under identical rules</div></div>
+    </div>
+    <div class="grid-2 mb-4">
+      <div class="card" style="margin-bottom:0;">
+        <div class="card__header" style="padding:0 0 10px;"><h3>Council requisition</h3><span class="text-xs text-muted">3 votes to act; ties fail toward ordinary processing</span></div>
+        <p class="text-xs text-muted mb-2">Each year the Council determines what the record's keeping actually needs — as-needed funding on the consumer-bureau pattern, its basis entered in the Journal. Program money is the opposite by design: the Annex carries fixed sums, because amounts belong to programs.</p>
+        <div class="form-row">
+          <div class="form-group"><label class="form-label">Amount ($)</label><input class="form-input" id="reqn-amount" type="number" value="${fq.amount}" placeholder="e.g. 250000"></div>
+          <div class="form-group"><label class="form-label">Basis (entered in the Journal)</label><input class="form-input" id="reqn-basis" value="${escHtml(fq.basis)}" placeholder="e.g. Q1 operations of the record"></div>
+        </div>
+        <button class="btn btn--primary" data-action="council-requisition">Council Votes (3&ndash;1) &rarr; Requisition the Bank</button>
+      </div>
+      <div class="card" style="margin-bottom:0;">
+        <h3 style="font-size:13.5px;font-weight:700;margin-bottom:8px;">What kind of obligation?</h3>
+        <p class="text-sm mb-2">A <strong>legal obligation of the United States and a general obligation</strong> — like coins and United States notes, which are obligations of the nation itself, not of the Mint or the Treasury that issue them — and expressly <em>not</em> like Federal Reserve notes or Treasury securities, which are obligations of particular institutions.</p>
+        <p class="text-xs text-muted mb-2">No Treasury officer takes any action at any step; the flow is purely legislative branch &rarr; Federal Reserve. It sits outside the debt limit, pays the Fed's own overnight rate (exactly neutral to the Fed's finances), and is accounted for in one place only — the Journal.</p>
+        <div class="alert alert--info" style="margin-bottom:0;"><strong>The precedent — and the designed-out failure mode.</strong> The model is the CFPB's standing draw (12 U.S.C. &sect;5497), upheld 7&ndash;2 in 2024. In 2025&ndash;26 an OLC theory claimed the Fed's operating losses meant "no combined earnings" to draw — courts rejected it, but the lesson stands: here a four-member Council holds the pen, and the funding depends on no earnings.</div>
+      </div>
+    </div>
+    <div class="card card--flush">
+      <div class="card__header"><h3>Rail B activity</h3></div>
+      <div class="card__body text-sm">
+        ${railB.length === 0 ? '<span class="text-muted">No Rail B payments yet — requisition first, then pay the comparison line (E).</span>' : railB.map(p => `<div class="mb-2">#${p.seq} &middot; ${formatExact(p.payload.amount)} &middot; ${formatDateTime(p.enteredAt)} &middot; paid by ${escHtml(p.payload.certifiedBy)}</div>`).join('')}
+      </div>
+    </div>
+  </div>`;
+}
+
+/* ========== VIEW: GOVERNANCE & LIMITS ========== */
+function renderGovernance(state) {
+  const bf = formState.brakeForm;
+  return `<div class="content-inner">
+    <h1 style="font-size:20px;font-weight:800;margin-bottom:4px;">Who Runs It — and What It Can Never Do</h1>
+    <p class="text-sm text-muted mb-4">Offices designed to be boring, and limits written into the text.</p>
+    <div class="grid-3 mb-4">
+      <div class="card" style="margin-bottom:0;"><h3 style="font-size:13px;font-weight:700;">The Council</h3><p class="text-xs mt-2">${state.council.members.map(escHtml).join(' &middot; ')}. Rotating chair; three votes to act; ties fail toward ordinary processing. Holds no key; writes nothing.</p></div>
+      <div class="card" style="margin-bottom:0;"><h3 style="font-size:13px;font-weight:700;">The Director</h3><p class="text-xs mt-2">A deliberately boring job: admit entries that follow the rules, reject the rest, publish everything, decide nothing. Removable only by the Council, for stated cause, in public.</p></div>
+      <div class="card" style="margin-bottom:0;"><h3 style="font-size:13px;font-weight:700;">Actors who never vote</h3><p class="text-xs mt-2">The Clerk and the Secretary of the Senate certify laws into the Journal; the Library of Congress runs the first project; GPO publishes and preserves. One adjudicator at GAO decides flagged judgment calls. The National Academy of Public Administration evaluates, using GAO's data.</p></div>
+    </div>
+
+    <div class="card card--flush mb-4">
+      <div class="card__header"><h3>Shadow-first readiness</h3><span class="text-sm text-muted">every line runs under ordinary process until Director + Comptroller General certify — line by line, standards published in advance</span></div>
+      <div class="table-wrap"><table>
+        <thead><tr><th>Line</th><th>Mode</th><th>Certified by</th><th></th></tr></thead>
+        <tbody class="text-sm">
+          ${state.bill.annex.lines.map(l => {
+            const r = state.readiness[l.id];
+            return `<tr><td>${escHtml(l.name)}</td>
+              <td>${r.mode === 'certified' ? '<span class="badge badge--green">certified</span>' : '<span class="badge badge--slate">shadow</span>'}</td>
+              <td class="text-xs">${r.certifiedBy.join(' + ') || '&mdash;'}</td>
+              <td>${r.mode === 'shadow' && state.certified ? `<button class="btn btn--xs btn--outline" data-action="certify-readiness" data-line="${l.id}">Certify readiness</button>` : ''}</td></tr>`;
+          }).join('')}
+        </tbody>
+      </table></div>
+    </div>
+
+    <div class="grid-2 mb-4">
+      <div class="card" style="margin-bottom:0;">
+        <div class="card__header" style="padding:0 0 10px;"><h3>The brake</h3><span class="text-xs text-muted">3 of 4 to pull &middot; new requests only &middot; 72h unless renewed</span></div>
+        ${state.brake.active ? `<div class="alert alert--error">Active on ${state.brake.lineId || 'all lines'} — expires ${formatDateTime(state.brake.expiresAt)} (renewals: ${state.brake.renewals})</div>
+          <div class="flex gap-2"><button class="btn btn--outline btn--sm" data-action="renew-brake">Renew (+72h)</button><button class="btn btn--success btn--sm" data-action="release-brake">Release</button></div>` : `
+        ${BRAKE_PRINCIPALS.map((p, i) => `<label class="flex items-center gap-2 text-sm mb-2" style="cursor:pointer;"><input type="checkbox" class="brake-holder" data-idx="${i}" ${bf.holders[i] ? 'checked' : ''}> ${escHtml(p)}</label>`).join('')}
+        <div class="form-row">
+          <div class="form-group"><label class="form-label">Line (blank = all)</label>
+            <select class="form-select" id="brake-line"><option value="">all lines</option>${state.bill.annex.lines.map(l => `<option value="${l.id}" ${bf.lineId === l.id ? 'selected' : ''}>${escHtml(l.name)}</option>`).join('')}</select></div>
+          <div class="form-group"><label class="form-label">Reasons (published instantly)</label><input class="form-input" id="brake-reasons" value="${escHtml(bf.reasons)}" placeholder="required"></div>
+        </div>
+        <button class="btn btn--danger" data-action="pull-brake" ${bf.holders.filter(Boolean).length >= 3 ? '' : 'disabled'}>Pull the Brake (${bf.holders.filter(Boolean).length}/4 signed — 3 required)</button>`}
+      </div>
+      <div class="card" style="margin-bottom:0;">
+        <div class="card__header" style="padding:0 0 10px;"><h3>The floor</h3><span class="text-xs text-muted">never delay a lawful payment</span></div>
+        <p class="text-xs text-muted mb-2">If the system is down, payments proceed the old way and reconcile after. A Fed-rail outage falls back to the Treasury rail the same way. A separate technical switch merely returns a line to ordinary processing and never stops money.</p>
+        ${state.floor.systemDown ? `<div class="alert alert--warning">SYSTEM DOWN since ${formatDateTime(state.floor.downSince)} — old-way queue: ${state.floor.oldWayPayments.length}</div>
+          <button class="btn btn--success" data-action="restore-system">Restore &amp; Reconcile</button>` :
+          `<button class="btn btn--outline" data-action="system-down">Simulate Outage (floor drill)</button>`}
+        <div class="section-title mt-4">Responsibility</div>
+        <p class="text-xs text-muted">Officers answer for their own false certifications; good-faith reliance on the system is protected; losses come from the claims reserve (line D). <strong>No clawback switch:</strong> money already paid is recoverable only through a court.</p>
+        <div class="section-title mt-4">Milestone certification</div>
+        ${state.bill.annex.lines.flatMap(l => l.milestones).map(m => `<div class="text-sm mb-2">${escHtml(m.description)} — <strong>${m.status}</strong>
+          ${m.status === 'pending' ? `<button class="btn btn--xs btn--outline" data-action="certify-milestone" data-id="${m.id}">GAO certifies</button>` : ''}</div>`).join('') || '<span class="text-xs text-muted">none</span>'}
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="card__header" style="padding:0 0 10px;"><h3>What it can never do</h3></div>
+      <ul style="margin-left:18px;font-size:13px;line-height:1.7;">
+        <li><strong>Not a payment system; builds no rails.</strong> The Account is one institutional deposit account: expressly not a central bank digital currency, not a retail account, not a new payment network.</li>
+        <li>A <strong>warrant is not money</strong> and orders no one; no entry gives anyone a right to be paid.</li>
+        <li><strong>No new program spending</strong> — only the infrastructure's upkeep and the small pilot.</li>
+        <li>The <strong>enacted prose always beats the data</strong>; commentary never moves a number; study copies are operative for nothing.</li>
+        <li><strong>No clawback switch</strong> — recovery only through a court.</li>
+        <li><strong>Nothing commands the executive branch</strong>, and nothing touches executive money — ever — without a new law. Classified spending is wholly out of scope.</li>
+        <li><strong>Human judgment is protected in text:</strong> nothing may push future programs away from designs that need discretion, and no official may use flag counts to grade any program or office.</li>
+        <li><strong>"Automation enforces bad law too."</strong> Yes — symmetrically. The remedy for bad law is lawmaking; the brake is its lawful instrument; what the machine removes is unlawful one-man action in both directions.</li>
+      </ul>
+    </div>
+  </div>`;
+}
+
+/* ========== EVENT HANDLING ========== */
+function mountHandlers(state) {
+  const app = document.getElementById('app');
+  app.onclick = function(e) {
+    const target = e.target.closest('[data-action]');
+    if (!target) return;
+    handleAction(target.dataset.action, target.dataset, Store.getState());
+  };
+  app.onchange = function(e) {
+    const t = e.target;
+    if (t.id === 'commit-line') { formState.commitment.lineId = t.value; formState.commitment.purposeCode = ''; render(); }
+    if (t.id === 'commit-purpose') formState.commitment.purposeCode = t.value;
+    if (t.id === 'req-line') { formState.request.lineId = t.value; formState.request.commitmentRef = ''; formState.request.payeeId = ''; formState.request.purposeCode = ''; render(); }
+    if (t.id === 'req-commitment') formState.request.commitmentRef = t.value;
+    if (t.id === 'req-payee') formState.request.payeeId = t.value;
+    if (t.id === 'req-purpose') formState.request.purposeCode = t.value;
+    if (t.id === 'brake-line') formState.brakeForm.lineId = t.value;
+    if (t.id === 'protocol-line') Store.dispatch({ type: 'SELECT_LINE', payload: t.value });
+    if (t.classList.contains('brake-holder')) { formState.brakeForm.holders[parseInt(t.dataset.idx)] = t.checked; render(); }
+  };
+  app.oninput = function(e) {
+    const t = e.target;
+    if (t.id === 'commit-amount') formState.commitment.amount = t.value;
+    if (t.id === 'commit-contractor') formState.commitment.contractor = t.value;
+    if (t.id === 'commit-desc') formState.commitment.description = t.value;
+    if (t.id === 'req-amount') formState.request.amount = t.value;
+    if (t.id === 'req-invoice') formState.request.invoiceNo = t.value;
+    if (t.id === 'reqn-amount') formState.requisition.amount = t.value;
+    if (t.id === 'reqn-basis') formState.requisition.basis = t.value;
+    if (t.id === 'brake-reasons') formState.brakeForm.reasons = t.value;
+    if (t.classList.contains('adj-reason')) formState.adjReasons[t.dataset.seq] = t.value;
+  };
+}
+
+function currentFormDefaults(state) {
+  // Keep selects meaningful when values are unset.
+  const fc = formState.commitment;
+  const line = lineById(state, fc.lineId) || state.bill.annex.lines[0];
+  if (!fc.purposeCode && line) fc.purposeCode = line.purposeCodes[0];
+  const fr = formState.request;
+  const rl = lineById(state, fr.lineId) || state.bill.annex.lines[0];
+  if (!fr.purposeCode && rl) fr.purposeCode = rl.purposeCodes[0];
+  if (!fr.payeeId && rl) fr.payeeId = (PAYEE_LISTS[rl.payeeListId][0] || {}).id || '';
+  if (!fr.commitmentRef) {
+    const ledger = deriveLedger(state.journal, state.bill.annex.lines);
+    const per = (ledger.lines[rl.id] || { perCommitment: [] }).perCommitment;
+    if (per.length) fr.commitmentRef = String(per[per.length - 1].seq);
+  }
+}
+
+function handleAction(action, data, state) {
+  switch (action) {
+    case 'set-view': Store.dispatch({ type: 'SET_VIEW', payload: data.view }); break;
+    case 'set-bill-tab': Store.dispatch({ type: 'SET_BILL_TAB', payload: data.tab }); break;
+    case 'select-entry': Store.dispatch({ type: 'SELECT_ENTRY', payload: parseInt(data.seq) }); break;
+    case 'journal-filter': Store.dispatch({ type: 'SET_JOURNAL_FILTER', payload: data.filter }); break;
+    case 'select-study-copy': Store.dispatch({ type: 'SELECT_STUDY_COPY', payload: data.id }); break;
+
+    case 'clock-hours': Store.dispatch({ type: 'ADVANCE_CLOCK', payload: { hours: parseInt(data.hours) } }); break;
+    case 'clock-bdays': Store.dispatch({ type: 'ADVANCE_CLOCK', payload: { businessDays: parseInt(data.days) } }); break;
+    case 'clock-next': Store.dispatch({ type: 'ADVANCE_CLOCK', payload: { toNext: true } }); break;
+
+    /* enactment */
+    case 'refer-committee': Store.dispatch({ type: 'UPDATE_BILL_STATUS', payload: { status: 'in_committee' } }); break;
+    case 'report-bill': Store.dispatch({ type: 'UPDATE_BILL_STATUS', payload: { status: 'house_floor' } }); break;
+    case 'simulate-vote':
+      Store.dispatch({ type: 'UPDATE_BILL_STATUS', payload: { status: data.chamber === 'house' ? 'house_voting' : 'senate_voting' } });
+      setTimeout(() => startVoteAnimation(data.chamber, false), 50);
+      break;
+    case 'simulate-override':
+      Store.dispatch({ type: 'UPDATE_BILL_STATUS', payload: { status: data.chamber === 'house' ? 'veto_override_house' : 'veto_override_senate' } });
+      setTimeout(() => startVoteAnimation(data.chamber, true), 50);
+      break;
+    case 'file-cloture': {
+      const yea = 55 + Math.floor(Math.random() * 12);
+      const nay = 100 - yea - Math.floor(Math.random() * 3);
+      const invoked = yea >= 60;
+      Store.dispatch({ type: 'UPDATE_VOTES', payload: { votes: { cloture: { yea, nay, invoked } } } });
+      if (invoked) Store.dispatch({ type: 'UPDATE_BILL_STATUS', payload: { status: 'senate_floor' } });
+      break;
+    }
+    case 'vp-tiebreak': {
+      const b = Store.getState().bill;
+      if (!b.votes.senateCount || b.votes.senateCount.yea !== b.votes.senateCount.nay) return;
+      const newCount = Object.assign({}, b.votes.senateCount, { yea: b.votes.senateCount.yea + 1 });
+      Store.dispatch({ type: 'UPDATE_VOTES', payload: { votes: { senateCount: newCount, vpTieBreak: true } } });
+      Store.dispatch({ type: 'UPDATE_BILL_STATUS', payload: { status: 'senate_passed' } });
+      break;
+    }
+    case 'sign-bill':
+      Store.dispatch({ type: 'UPDATE_VOTES', payload: { votes: { presidentialAction: 'signed' } } });
+      Store.dispatch({ type: 'ENACT_BILL' });
+      break;
+    case 'no-action-bill':
+      Store.dispatch({ type: 'UPDATE_VOTES', payload: { votes: { presidentialAction: 'no_action' } } });
+      Store.dispatch({ type: 'ENACT_BILL' });
+      break;
+    case 'veto-bill':
+      Store.dispatch({ type: 'UPDATE_VOTES', payload: { votes: { presidentialAction: 'vetoed' } } });
+      Store.dispatch({ type: 'UPDATE_BILL_STATUS', payload: { status: 'vetoed' } });
+      break;
+    case 'certify-enactment': Store.dispatch({ type: 'CERTIFY_ENACTMENT' }); break;
+
+    /* pipeline */
+    case 'certify-readiness': Store.dispatch({ type: 'CERTIFY_READINESS', payload: { lineId: data.line } }); break;
+    case 'submit-commitment': {
+      const fc = formState.commitment;
+      if (!fc.lineId || !fc.amount) return;
+      Store.dispatch({ type: 'ADD_COMMITMENT', payload: { lineId: fc.lineId, amount: parseFloat(fc.amount), contractor: fc.contractor || 'Unnamed contractor', description: fc.description || '', purposeCode: fc.purposeCode || (lineById(state, fc.lineId) || {}).purposeCodes[0] } });
+      formState.commitment.amount = ''; formState.commitment.contractor = ''; formState.commitment.description = '';
+      break;
+    }
+    case 'submit-request': {
+      const fr = formState.request;
+      if (!fr.lineId || !fr.amount || !fr.commitmentRef) return;
+      Store.dispatch({ type: 'SUBMIT_REQUEST', payload: { lineId: fr.lineId, commitmentRef: parseInt(fr.commitmentRef), payeeId: fr.payeeId, amount: parseFloat(fr.amount), purposeCode: fr.purposeCode, invoiceNo: fr.invoiceNo || ('INV-' + uid().slice(-5)) } });
+      formState.request.amount = ''; formState.request.invoiceNo = '';
+      break;
+    }
+    case 'adjudicate': {
+      const seq = parseInt(data.seq);
+      const reasons = formState.adjReasons[seq] || '';
+      const flag = entryBySeq(Store.getState().journal, seq);
+      const line = flag ? lineById(Store.getState(), flag.lineId) : null;
+      Store.dispatch({ type: 'ADJUDICATE_FLAG', payload: { flagRef: seq, decision: data.decision, reasons, citedTerm: data.decision === 'deny' ? (line ? line.enactedText : reasons) : null } });
+      delete formState.adjReasons[seq];
+      break;
+    }
+    case 'execute-payment': Store.dispatch({ type: 'EXECUTE_PAYMENT', payload: { warrantRef: parseInt(data.seq) } }); break;
+    case 'run-reconstruction': Store.dispatch({ type: 'RUN_RECONSTRUCTION' }); break;
+    case 'council-requisition': {
+      const fq = formState.requisition;
+      if (!fq.amount) return;
+      Store.dispatch({ type: 'COUNCIL_REQUISITION', payload: { amount: parseFloat(fq.amount), basis: fq.basis || 'operations of the record', votes: 3 } });
+      formState.requisition.amount = ''; formState.requisition.basis = '';
+      break;
+    }
+    case 'pull-brake': {
+      const bf = formState.brakeForm;
+      const holders = BRAKE_PRINCIPALS.filter((_, i) => bf.holders[i]);
+      if (holders.length < 3) return;
+      Store.dispatch({ type: 'PULL_BRAKE', payload: { holders, reasons: bf.reasons || '(reasons required — published instantly)', lineId: bf.lineId || null } });
+      formState.brakeForm = { holders: [false, false, false, false], reasons: '', lineId: '' };
+      break;
+    }
+    case 'renew-brake': Store.dispatch({ type: 'RENEW_BRAKE' }); break;
+    case 'release-brake': Store.dispatch({ type: 'RELEASE_BRAKE' }); break;
+    case 'system-down': Store.dispatch({ type: 'SET_SYSTEM_DOWN' }); break;
+    case 'restore-system': Store.dispatch({ type: 'RESTORE_SYSTEM' }); break;
+    case 'certify-milestone': Store.dispatch({ type: 'CERTIFY_MILESTONE', payload: { milestoneId: data.id } }); break;
+
+    case 'ask-question': {
+      const st = Store.getState();
+      const line = lineById(st, st.selectedLineId) || st.bill.annex.lines[0];
+      const ledger = deriveLedger(st.journal, st.bill.annex.lines);
+      const L = ledger.lines[line.id];
+      const el = document.getElementById('protocol-answer');
+      if (!el) return;
+      let ans = '';
+      if (data.q === '1') ans = st.certified ? `YES — "${line.name}" is enacted law, certified as Journal entry #1 (fingerprint ${st.bill.annex.fingerprint}).` : 'NO — the bill has not been certified into the Journal yet.';
+      if (data.q === '2') ans = `${formatExact(Math.max(0, L.remaining))} unobligated of ${formatExact(L.provided)} provided (committed ${formatExact(L.committed)}, paid ${formatExact(L.paid)}). Recomputed from the Journal just now.`;
+      if (data.q === '4') ans = `Enacted payee list for "${line.name}": ${(PAYEE_LISTS[line.payeeListId] || []).map(p => p.name).join('; ')}. Anyone not on the list fails test 4 automatically.`;
+      if (data.q === '8') {
+        const lastPayment = [...st.journal].reverse().find(e => e.kind === 'payment');
+        ans = lastPayment ? 'Chain for payment #' + lastPayment.seq + ': ' + chainFor(st.journal, lastPayment.seq).map(c => `#${c.seq} ${c.kind}`).join(' ← ') : 'No payments in the Journal yet.';
+      }
+      el.textContent = ans;
+      el.classList.remove('hidden');
+      break;
+    }
+
+    case 'reset-demo':
+      if (confirm('Reset all data to defaults? This cannot be undone.')) {
+        localStorage.removeItem('efiscal-demo-state-v1');
+        Store._state = getInitialState();
+        Store._notify();
+      }
+      break;
+    case 'start-guided-demo': startGuidedDemo(); break;
+    case 'demo-next': if (window._demoResolve) window._demoResolve(); break;
+    case 'demo-stop': stopGuidedDemo(); break;
+  }
+}
+
+/* ========== GUIDED DEMO ENGINE ========== */
+let _demoRunning = false;
+let _demoAborted = false;
+function stopGuidedDemo() {
+  _demoRunning = false; _demoAborted = true;
+  if (window._demoResolve) window._demoResolve();
+  document.body.classList.remove('demo-active');
+  const bar = document.getElementById('demo-bar');
+  if (bar) bar.remove();
+  render();
+}
+function demoWaitForClick(stepLabel, stepNum, totalSteps, message) {
+  return new Promise(resolve => {
+    if (_demoAborted) { resolve(); return; }
+    window._demoResolve = resolve;
+    updateDemoBar(stepLabel, stepNum, totalSteps, message, false);
+  });
+}
+function demoWait(ms) {
+  return new Promise(resolve => { if (_demoAborted) { resolve(); return; } setTimeout(resolve, ms); });
+}
+function demoWaitForVote() {
+  return new Promise(resolve => {
+    if (_demoAborted) { resolve(); return; }
+    const check = setInterval(() => { if (!voteAnimating || _demoAborted) { clearInterval(check); resolve(); } }, 100);
+  });
+}
+function updateDemoBar(stepLabel, stepNum, totalSteps, message, waiting) {
+  let bar = document.getElementById('demo-bar');
+  if (!bar) { bar = document.createElement('div'); bar.id = 'demo-bar'; bar.className = 'demo-bar'; document.body.appendChild(bar); }
+  const pct = (stepNum / totalSteps * 100).toFixed(1);
+  bar.innerHTML = `<div class="demo-bar__progress" style="width:${pct}%"></div>
+    <div class="demo-bar__inner">
+      <div class="demo-bar__step">Step ${stepNum}/${totalSteps}</div>
+      <div class="demo-bar__text">${message}</div>
+      <div class="demo-bar__actions">
+        ${waiting ? '<span class="text-sm" style="color:var(--slate-400);white-space:nowrap;">Processing...</span>' : `<button class="demo-bar__btn demo-bar__btn--next" data-action="demo-next">Next &rarr;</button>`}
+        <button class="demo-bar__btn demo-bar__btn--skip" data-action="demo-stop">Exit Demo</button>
+      </div>
+    </div>`;
+  bar.onclick = function(e) {
+    const t = e.target.closest('[data-action]');
+    if (t) handleAction(t.dataset.action, t.dataset, Store.getState());
+  };
+}
+
+async function startGuidedDemo() {
+  if (_demoRunning) return;
+  _demoRunning = true; _demoAborted = false;
+  localStorage.removeItem('efiscal-demo-state-v1');
+  Store._state = getInitialState();
+  Store._notify();
+  document.body.classList.add('demo-active');
+  const T = 41;
+  function ab() { return _demoAborted; }
+  const D = (type, payload) => Store.dispatch({ type, payload });
+  const view = v => { D('SET_VIEW', v); };
+
+  // ===== ACT I — THE TRANSLATION PROBLEM =====
+  view('problem');
+  await demoWaitForClick('Welcome', 1, T,
+    'Welcome to the <strong>E-FISCAL Machine</strong> — a toy model of the E-FISCAL Act (discussion draft): Phase 1 only, Congress\'s own money, existing rails, expressly no CBDC. Note the <strong>demo clock</strong> in the header — time moves only when you move it. Click Next.');
+  if (ab()) return;
+  await demoWaitForClick('The Problem', 2, T,
+    'Today Congress passes <strong>paragraphs of text</strong>; the executable version — accounts, codes, schedules — is written after the vote, by the executive. Of the seven steps in this chain, <strong>one row is enacted law; six are translation</strong>.');
+  if (ab()) return;
+  await demoWaitForClick('The Gap', 3, T,
+    'The text is already machine-readable (<strong>USLM XML</strong>, since the 113th Congress) — but USLM has <strong>no fiscal elements</strong>: "$41,455,000" is just a text node. The Treasury Account Symbol (8 components, right card) is assigned in CARS <em>after</em> enactment. The Clerk\'s Comparative Print Suite already executes text amendments — E-FISCAL extends that to money.');
+  if (ab()) return;
+  await demoWaitForClick('February 2025', 4, T,
+    'February 2025 showed the cost: control of a few internal chokepoints stopped enacted payments without any change in law. And two exceptions already exist — the institutional Congress is <strong>exempt from apportionment</strong> (31 U.S.C. &sect;1511(b)(3)), and the CFPB never touches the Treasury at all (upheld 2024). The pipeline is modular. What nobody has removed is the translation itself.');
+  if (ab()) return;
+  await demoWaitForClick('The Fix', 5, T,
+    'The fix: <strong>enact the mechanical structure before the vote</strong> — amounts, dates, purposes, payees as labeled fields — with judgment calls <strong>named, clocked, and public</strong>. Facts get fixed at drafting; judgment stays human and becomes visible.');
+  if (ab()) return;
+
+  // ===== ACT II — THE BILL =====
+  view('bill'); D('SET_BILL_TAB', 'text');
+  await demoWaitForClick('The Bill', 6, T,
+    'The pilot bill. The prose creates the <strong>Journal</strong>, the <strong>Ledger</strong>, the <strong>Protocol</strong>, the <strong>Account</strong> — and &sect;401 is a list of what the Act can <em>never</em> do. The bill carries the legislative text and an Annex that is the machine-readable schedule.');
+  if (ab()) return;
+  D('SET_BILL_TAB', 'annex');
+  await demoWaitForClick('The Annex', 7, T,
+    'The <strong>formalized schedule</strong>: five lines, [$15M draft] over three years — office operations, the Protocol build, the Library of Congress first project, a claims reserve, and a comparison line. Green rows are <strong>mechanical fields</strong> — the only things the machine ever evaluates. Every amount is a bracketed DRAFT placeholder, as in the discussion draft.');
+  if (ab()) return;
+  await demoWaitForClick('Judgment Fields', 8, T,
+    'Line B carries the demo\'s <strong>judgment field</strong> (amber): payments to "<strong>qualified</strong>" outside security researchers. The machine never evaluates "qualified" — the term is marked in the text, assigned to a named GAO adjudicator, with a 3-business-day clock. Discretion isn\'t shrunk; it\'s named.');
+  if (ab()) return;
+  await demoWaitForClick('Self-Executing Condition', 9, T,
+    'Line C\'s second installment is <strong>locked</strong> — it unlocks automatically when GAO certifies the first tranche of study copies delivered. A condition that executes itself. Line D is <strong>no-year money</strong> (Availability Type X — note its TAS has no BPOA/EPOA). Line E pays on <strong>Rail B</strong>.');
+  if (ab()) return;
+  await demoWaitForClick('The Fingerprint', 10, T,
+    'The Annex\'s <strong>fingerprint is printed in the statute</strong>. The printed text controls; the computer file is the same content in a second form, and anyone can verify the match. (Here: a demo hash standing in for SHA-256.)');
+  if (ab()) return;
+  D('SET_BILL_TAB', 'enact');
+  D('UPDATE_BILL_STATUS', { status: 'in_committee' });
+  await demoWaitForClick('Committee', 11, T,
+    'Enactment is the ordinary Article I gauntlet — nothing about this bill changes how a bill becomes law. Referred to committee, marked up, reported.');
+  if (ab()) return;
+  D('UPDATE_BILL_STATUS', { status: 'house_floor' });
+  updateDemoBar('House Vote', 12, T, 'Simulating the <strong>House vote</strong> — a majority of Members present and voting…', true);
+  D('UPDATE_BILL_STATUS', { status: 'house_voting' });
+  await demoWait(100); startVoteAnimation('house', false); await demoWaitForVote();
+  if (ab()) return;
+  await demoWait(300); render();
+  const hc = Store.getState().bill.votes.houseCount;
+  await demoWaitForClick('House Vote', 12, T,
+    `The House voted <strong>${hc.yea}&ndash;${hc.nay}</strong> — passed. Now the Senate: cloture first (Rule XXII, 60 votes), then passage.`);
+  if (ab()) return;
+  D('UPDATE_VOTES', { votes: { cloture: { yea: 62, nay: 38, invoked: true } } });
+  D('UPDATE_BILL_STATUS', { status: 'senate_floor' });
+  updateDemoBar('Senate Vote', 13, T, 'Cloture invoked 62&ndash;38. Simulating the <strong>Senate passage vote</strong>…', true);
+  D('UPDATE_BILL_STATUS', { status: 'senate_voting' });
+  await demoWait(100); startVoteAnimation('senate', false); await demoWaitForVote();
+  if (ab()) return;
+  await demoWait(300); render();
+  const sc = Store.getState().bill.votes.senateCount;
+  await demoWaitForClick('Senate Vote', 13, T,
+    `The Senate voted <strong>${sc.yea}&ndash;${sc.nay}</strong> — passed. On to the President, who signs.`);
+  if (ab()) return;
+  D('UPDATE_VOTES', { votes: { presidentialAction: 'signed' } });
+  D('ENACT_BILL');
+  render();
+  await demoWaitForClick('Enacted', 14, T,
+    '<strong>Signed and enacted.</strong> Now the step that is new: the <strong>Clerk of the House and the Secretary of the Senate</strong> — the officers who attest enrolled bills today — jointly certify the enacted formalization into the Journal.');
+  if (ab()) return;
+
+  // ===== ACT III — JOURNAL & PROTOCOL =====
+  D('CERTIFY_ENACTMENT');
+  view('journal');
+  await demoWaitForClick('The Journal', 15, T,
+    'The law is <strong>Journal entry #1</strong> — with its fingerprint, two dates (written / entered), and a version number. Pages are added, never torn out or rewritten. Note the <strong>EMBARGOED</strong> badge: every entry is public within 24 hours.');
+  if (ab()) return;
+  view('protocol');
+  await demoWaitForClick('The Protocol', 16, T,
+    'The <strong>Protocol</strong> is the public rulebook: the grammar, the <strong>eight questions</strong> anyone may ask (four are live buttons here — try "Does this appropriation exist?"), and who may write which entries. Note the middle row: <strong>checks and warrants are written by the machine only</strong>.');
+  if (ab()) return;
+  view('governance');
+  D('CERTIFY_READINESS', { lineId: 'line-a' });
+  await demoWaitForClick('Shadow First', 17, T,
+    'Every line starts in <strong>shadow</strong> — ordinary process — until the Director and the Comptroller General jointly certify readiness, line by line, against standards published in advance. Line A is now <strong>certified</strong>; the machinery must earn every job it is given.');
+  if (ab()) return;
+
+  // ===== ACT IV — A PAYMENT'S LIFE =====
+  view('payments');
+  D('ADD_COMMITMENT', { lineId: 'line-a', amount: 120000, contractor: 'Capitol Technology Services LLC', description: 'IT support, Office of the Fiscal Record', purposeCode: 'operations' });
+  await demoWaitForClick('Commit', 18, T,
+    '<strong>Phase: commit.</strong> The office signs a $120,000 IT-support contract on Line A — <em>the moment spending law actually bites</em> — and the check already ran once, at contract-signing: enough left, inside the window, right purpose.');
+  if (ab()) return;
+  let st = Store.getState();
+  const commit1 = [...st.journal].reverse().find(e => e.kind === 'commitment');
+  D('SUBMIT_REQUEST', { lineId: 'line-a', commitmentRef: commit1.seq, payeeId: 'p-capitol-tech', amount: 40000, purposeCode: 'operations', invoiceNo: 'INV-001' });
+  await demoWaitForClick('Request → PASS', 19, T,
+    'A <strong>$40,000 payment request</strong> declares the commitment it pays down, and the five-test conformity check runs — all green. The <strong>warrant issues by itself</strong>: no human touched it, and none could. A warrant is not money and orders no one.');
+  if (ab()) return;
+  st = Store.getState();
+  const w1 = warrantsAwaitingPayment(st.journal)[0];
+  D('EXECUTE_PAYMENT', { warrantRef: w1.seq });
+  await demoWaitForClick('Rail A', 20, T,
+    '<strong>Paid on Rail One.</strong> The chambers\' own disbursing officers certify — the House CAO is a statutory disbursing officer today (2 U.S.C. &sect;5309) — and Treasury processes exactly as it does now, with one added rule: <strong>pay only against a warrant, and pay every warranted payment</strong>.');
+  if (ab()) return;
+  D('ADVANCE_CLOCK', { hours: 25 });
+  view('journal');
+  await demoWaitForClick('Public in 24h', 21, T,
+    'The clock advanced 25 hours: the whole chain — law, commitment, request, check, warrant, payment — is now <strong>PUBLIC</strong>. Congress already publishes its accounts (the House Statement of Disbursements has been online since 2009); this makes the record continuous and to the penny.');
+  if (ab()) return;
+  view('payments');
+  st = Store.getState();
+  D('SUBMIT_REQUEST', { lineId: 'line-a', commitmentRef: commit1.seq, payeeId: 'p-capitol-tech', amount: 200000, purposeCode: 'operations', invoiceNo: 'INV-002' });
+  await demoWaitForClick('Clear Violation', 22, T,
+    '<strong>$200,000 requested against an $80,000 open commitment — REFUSED automatically.</strong> The refusal cites the exact enacted term violated, with reasons on the record. Fixable, never waivable: no officer can waive the enacted amount, and none can be pressured to.');
+  if (ab()) return;
+  D('CERTIFY_READINESS', { lineId: 'line-b' });
+  D('ADD_COMMITMENT', { lineId: 'line-b', amount: 450000, contractor: 'Red-team roster', description: 'Protocol red-team engagements', purposeCode: 'red-team' });
+  st = Store.getState();
+  const commitB = [...st.journal].reverse().find(e => e.kind === 'commitment');
+  D('SUBMIT_REQUEST', { lineId: 'line-b', commitmentRef: commitB.seq, payeeId: 'p-researcher', amount: 30000, purposeCode: 'red-team', invoiceNo: 'RT-001' });
+  await demoWaitForClick('Judgment Flag', 23, T,
+    'Line B certified; a red-team commitment signed; and a <strong>$30,000 payment to a new researcher</strong> trips the judgment field: is A. Doe "<strong>qualified</strong>"? The machine does not decide — it routes to the named GAO adjudicator with a <strong>3-business-day clock</strong> and written-reasons requirement.');
+  if (ab()) return;
+  st = Store.getState();
+  const flag1 = pendingFlags(st.journal)[0];
+  formState.adjReasons[flag1.seq] = 'Roster application reviewed; credentials verify; amounts reasonable per published schedule.';
+  D('ADJUDICATE_FLAG', { flagRef: flag1.seq, decision: 'approve', reasons: formState.adjReasons[flag1.seq] });
+  delete formState.adjReasons[flag1.seq];
+  await demoWaitForClick('Adjudicated in Writing', 24, T,
+    'The adjudicator <strong>approved in writing</strong> — reasons on the record — and the warrant issued. (A denial would have to cite the exact enacted term violated.) Now the other path: a flag that gets <em>ignored</em>.');
+  if (ab()) return;
+  D('SUBMIT_REQUEST', { lineId: 'line-b', commitmentRef: commitB.seq, payeeId: 'p-researcher', amount: 600000, purposeCode: 'red-team', invoiceNo: 'RT-002' });
+  await demoWaitForClick('Large Flag → Ping', 25, T,
+    'Wait — $600,000 exceeds the commitment… so first fix the request. Actually: this one was <strong>REFUSED</strong> (over the open commitment). Watch instead the ping rule on the next one: large flagged amounts ping the overseers <strong>in real time, without pausing the clock</strong>.');
+  if (ab()) return;
+  D('ADD_COMMITMENT', { lineId: 'line-b', amount: 900000, contractor: 'Red-team roster (expanded)', description: 'Expanded red-team round', purposeCode: 'red-team' });
+  st = Store.getState();
+  const commitB2 = [...st.journal].reverse().find(e => e.kind === 'commitment');
+  D('SUBMIT_REQUEST', { lineId: 'line-b', commitmentRef: commitB2.seq, payeeId: 'p-researcher', amount: 600000, purposeCode: 'red-team', invoiceNo: 'RT-003' });
+  await demoWaitForClick('The Ignored Flag', 26, T,
+    'A proper <strong>$600,000 flagged request</strong> — large enough to <strong>ping the Appropriations principals</strong> (see the ping feed below; the clock did not pause). Now suppose the adjudicator simply sits on it. Advance the clock 3 business days…');
+  if (ab()) return;
+  D('ADVANCE_CLOCK', { businessDays: 3 });
+  D('ADVANCE_CLOCK', { hours: 1 });
+  await demoWaitForClick('Silence Deems Approval', 27, T,
+    '<strong>Silence deemed approval — by operation of law.</strong> The deadline passed with no written decision, so the adjudication entered itself and the warrant issued. Silence can never be a way to sit on lawful money. (Both entries are in the Journal, marked "deemed.")');
+  if (ab()) return;
+
+  // ===== ACT V — RAIL B & THE MACHINE'S MONEY =====
+  view('account');
+  D('COUNCIL_REQUISITION', { amount: 250000, basis: 'Q1 operations of the record + comparison-line funding', votes: 3 });
+  await demoWaitForClick('The Requisition', 28, T,
+    '<strong>The machine\'s own money.</strong> The Council (Comptroller General, CBO Director, both chambers\' legislative counsels) voted 3&ndash;1 and requisitioned the Bank directly. A <strong>special obligation of the United States arises by operation of the statute</strong>; the Bank records it and credits the Account. No Treasury officer acted.');
+  if (ab()) return;
+  await demoWaitForClick('The Obligation Family', 29, T,
+    'The obligation is a <strong>general obligation</strong> — the coins-and-United-States-notes family, obligations of the nation itself — expressly <em>not</em> a Federal Reserve note or a Treasury security. Outside the debt limit; pays the Fed\'s own overnight rate; accounted for in one place only: the Journal. The model is the CFPB\'s standing draw, upheld in 2024 — with its 2025&ndash;26 "no combined earnings" failure mode designed out.');
+  if (ab()) return;
+  D('CERTIFY_READINESS', { lineId: 'line-e' });
+  D('ADD_COMMITMENT', { lineId: 'line-e', amount: 90000, contractor: 'NAPA (evaluation support)', description: 'Two-rail evaluation support', purposeCode: 'evaluation' });
+  st = Store.getState();
+  const commitE = [...st.journal].reverse().find(e => e.kind === 'commitment');
+  D('SUBMIT_REQUEST', { lineId: 'line-e', commitmentRef: commitE.seq, payeeId: 'p-eval', amount: 45000, purposeCode: 'evaluation', invoiceNo: 'CMP-001' });
+  st = Store.getState();
+  const wE = warrantsAwaitingPayment(st.journal).find(w => w.lineId === 'line-e');
+  if (wE) D('EXECUTE_PAYMENT', { warrantRef: wE.seq });
+  view('payments');
+  await demoWaitForClick('Rail B', 30, T,
+    '<strong>The comparison line paid on Rail Two:</strong> same commitment, same request, same five-test check, same warrant — but the <strong>Bank pays from the Congressional General Account</strong> over the Fed\'s ordinary systems, under the janitor rule (the Bank holds no key). The independent evaluation compares the two rails under identical Journal discipline.');
+  if (ab()) return;
+
+  // ===== ACT VI — THE LEDGER =====
+  view('ledger');
+  await demoWaitForClick('The Ledger', 31, T,
+    '<strong>The Ledger: provided, committed, paid, remaining</strong> — per line and per commitment. Its one rule: it has <strong>no authority of its own</strong>. It is calculated from the Journal by the published recipe on the left.');
+  if (ab()) return;
+  D('CERTIFY_MILESTONE', { milestoneId: 'milestone-loc-1' });
+  await demoWaitForClick('The Milestone Executes Itself', 32, T,
+    'GAO just certified the Library of Congress milestone — and <strong>Line C\'s second installment unlocked automatically</strong>: watch "Provided" jump by [$1.5M]. A condition that executes itself, in the enacted text.');
+  if (ab()) return;
+  D('RUN_RECONSTRUCTION');
+  await demoWaitForClick('Outside Reconstruction', 33, T,
+    '<strong>Re-run the recipe:</strong> an independent pass over the public Journal rebuilds every balance — <strong>MATCH, to the penny</strong>. You don\'t have to trust the office or the software. You can check.');
+  if (ab()) return;
+
+  // ===== ACT VII — DRILLS =====
+  view('governance');
+  formState.brakeForm = { holders: [true, true, true, false], reasons: 'Red-team spending pattern under review by the committees', lineId: 'line-b' };
+  D('PULL_BRAKE', { holders: BRAKE_PRINCIPALS.slice(0, 3), reasons: 'Red-team spending pattern under review by the committees', lineId: 'line-b' });
+  await demoWaitForClick('The Brake', 34, T,
+    '<strong>Brake drill.</strong> Three of the four Appropriations principals suspended <em>new</em> requests on Line B — reasons published <strong>instantly</strong> (no 24-hour embargo), expiring in <strong>72 hours unless renewed</strong>. Payments in flight are never touched, and the brake is a lawful act of the committees — not a technician\'s override.');
+  if (ab()) return;
+  view('payments');
+  D('SUBMIT_REQUEST', { lineId: 'line-b', commitmentRef: commitB2.seq, payeeId: 'p-redline', amount: 20000, purposeCode: 'red-team', invoiceNo: 'RT-004' });
+  await demoWaitForClick('Refused by the Brake', 35, T,
+    'A new Line B request <strong>died at the gate</strong> — refused with the brake citation on the record (not a conformity violation; the money and the law are unchanged). Now advance the clock 72 hours: the brake <strong>expires on its own</strong> unless renewed.');
+  if (ab()) return;
+  D('ADVANCE_CLOCK', { hours: 73 });
+  view('governance');
+  D('SET_SYSTEM_DOWN');
+  D('SUBMIT_REQUEST', { lineId: 'line-a', commitmentRef: commit1.seq, payeeId: 'p-capitol-tech', amount: 15000, purposeCode: 'operations', invoiceNo: 'INV-003' });
+  await demoWaitForClick('The Floor', 36, T,
+    'Brake lapsed (see the Journal). <strong>Floor drill:</strong> the system is down — and a payment just <strong>proceeded the old way</strong> into the fallback queue. At no time shall the machine\'s operation or non-operation delay or prevent the payment of any amount lawfully due.');
+  if (ab()) return;
+  D('RESTORE_SYSTEM');
+  await demoWaitForClick('Reconcile After', 37, T,
+    'System restored — the old-way payment <strong>reconciled into the Journal</strong> after the fact, and the Ledger picks it up. Failure drills, filmed: the rogue over-limit request died in public (step 22); the seized decision-maker\'s key was beaten by the deadline clock (step 27); the outage never stopped money.');
+  if (ab()) return;
+
+  // ===== ACT VIII — STUDY COPY & CLOSE =====
+  view('journal');
+  D('SELECT_STUDY_COPY', 'sc-clerk');
+  await demoWaitForClick('The Study Copy', 38, T,
+    '<strong>The first project: the machine describes itself.</strong> The Library of Congress renders old prose laws into the grammar as <strong>NON-OPERATIVE study copies</strong> — here, the real FY2024 Office of the Clerk line: $41,455,000, of which $9,000,000 no-year, with a $25,000 reception cap.');
+  if (ab()) return;
+  await demoWaitForClick('The Discrepancy Report', 39, T,
+    'Every converted law ships with a <strong>discrepancy report</strong>: "salaries and expenses… including" could not be made mechanical — a judgment field was used, with a named officer. Delivered to the Appropriations Committees as <strong>drafting feedback</strong>, with their response printed inside. Never a ranking, never a scorecard.');
+  if (ab()) return;
+  view('governance');
+  await demoWaitForClick('What It Can Never Do', 40, T,
+    'The limits are in the text: <strong>not a payment system; expressly no CBDC</strong>; a warrant is not money; the prose beats the data; no clawback; nothing touches executive money without a new law; classified spending out of scope; judgment protected. And yes — <strong>automation enforces bad law too, symmetrically</strong>: the remedy is lawmaking, and the brake is its lawful instrument.');
+  if (ab()) return;
+  view('ledger');
+  await demoWaitForClick('Complete', 41, T,
+    '<strong>The one-sentence version:</strong> Congress already publishes its proceedings, its accounts, and its laws as data; the E-FISCAL Act completes the thought — enacting the spending law itself in a form people and machines can both read, keeping the whole record in a Journal and Ledger anyone can verify, hosted on distributed copies and funded by an account no one can starve, proven first on Congress\'s own money by a machine that <strong>commands no one and must earn every job it is given</strong>. Explore freely.');
+  if (ab()) return;
+
+  _demoRunning = false;
+  document.body.classList.remove('demo-active');
+  const bar = document.getElementById('demo-bar');
+  if (bar) bar.remove();
+}
+
+/* ========== SMOKE TESTS (pure logic, no DOM) ========== */
+function runSmokeTests() {
+  const results = [];
+  const check = (name, cond, detail) => results.push({ name, pass: !!cond, detail: detail || '' });
+  let s = getInitialState();
+  const D = (type, payload) => { s = reducer(s, { type, payload }); };
+
+  check('fresh: journal empty, draft, all shadow', s.journal.length === 0 && s.bill.status === 'draft' && Object.values(s.readiness).every(r => r.mode === 'shadow'));
+  check('fingerprint deterministic', fingerprint(s.bill.annex.lines) === s.bill.annex.fingerprint);
+  check('addBusinessDays skips weekend', addBusinessDays('2027-01-08T09:00:00.000Z', 3).startsWith('2027-01-13')); // Fri + 3 biz = Wed
+
+  // enact + certify
+  D('ENACT_BILL'); D('CERTIFY_ENACTMENT');
+  check('certification appends law entry v1 w/ two dates', s.journal.length === 2 && s.journal[0].kind === 'law' && s.journal[0].version === 1 && !!s.journal[0].writtenAt && !!s.journal[0].enteredAt);
+  const snapshot = JSON.stringify(s.journal[0]);
+  D('CERTIFY_ENACTMENT');
+  check('certify is idempotent', s.journal.length === 2);
+
+  // shadow gating
+  D('ADD_COMMITMENT', { lineId: 'line-a', amount: 100000, contractor: 'X', description: 'x', purposeCode: 'operations' });
+  check('commitment refused while in shadow', s.journal[s.journal.length - 1].kind === 'note' && s.journal[s.journal.length - 1].payload.refusedKind === 'commitment');
+  D('CERTIFY_READINESS', { lineId: 'line-a' });
+  D('CERTIFY_READINESS', { lineId: 'line-b' });
+  D('CERTIFY_READINESS', { lineId: 'line-e' });
+
+  // commitment + ledger math
+  D('ADD_COMMITMENT', { lineId: 'line-a', amount: 120000, contractor: 'CapTech', description: 'IT', purposeCode: 'operations' });
+  const commitSeq = s.journal[s.journal.length - 1].seq;
+  let led = deriveLedger(s.journal, s.bill.annex.lines);
+  check('commitment raises committed', led.lines['line-a'].committed === 120000 && led.lines['line-a'].remaining === 6000000 - 120000);
+  D('ADD_COMMITMENT', { lineId: 'line-a', amount: 99000000, contractor: 'Too big', description: 'x', purposeCode: 'operations' });
+  check('over-authority commitment refused & cites enacted text', s.journal[s.journal.length - 1].payload.refused === true && s.journal[s.journal.length - 1].payload.citedTerm.includes('6,000,000'));
+
+  // happy path: PASS auto-warrant in same dispatch
+  D('SUBMIT_REQUEST', { lineId: 'line-a', commitmentRef: commitSeq, payeeId: 'p-capitol-tech', amount: 40000, purposeCode: 'operations', invoiceNo: 'I1' });
+  const lastThree = s.journal.slice(-3).map(e => e.kind);
+  check('PASS: request+check+warrant in one dispatch', JSON.stringify(lastThree) === JSON.stringify(['request','check','warrant']) && s.journal[s.journal.length - 1].payload.autoIssued === true);
+  const warrantSeq = s.journal[s.journal.length - 1].seq;
+  D('EXECUTE_PAYMENT', { warrantRef: warrantSeq });
+  led = deriveLedger(s.journal, s.bill.annex.lines);
+  check('payment: paid & open reconcile', led.lines['line-a'].paid === 40000 && led.lines['line-a'].open === 80000);
+  check('chain walks payment→law', chainFor(s.journal, s.journal[s.journal.length - 1].seq).some(e => e.kind === 'law'));
+  D('EXECUTE_PAYMENT', { warrantRef: warrantSeq });
+  check('double payment blocked', s.journal.filter(e => e.kind === 'payment').length === 1);
+
+  // violations
+  D('SUBMIT_REQUEST', { lineId: 'line-a', commitmentRef: commitSeq, payeeId: 'p-capitol-tech', amount: 200000, purposeCode: 'operations', invoiceNo: 'I2' });
+  let lastCheck = [...s.journal].reverse().find(e => e.kind === 'check');
+  check('over-commitment request = VIOLATION citing enacted term', lastCheck.payload.outcome === 'VIOLATION' && !!lastCheck.payload.citedTerm);
+  check('violation issues no warrant', s.journal.filter(e => e.kind === 'warrant').length === 1);
+  D('SUBMIT_REQUEST', { lineId: 'line-a', commitmentRef: commitSeq, payeeId: 'p-loc', amount: 1000, purposeCode: 'operations', invoiceNo: 'I3' });
+  lastCheck = [...s.journal].reverse().find(e => e.kind === 'check');
+  check('ineligible payee fails test 4', lastCheck.payload.outcome === 'VIOLATION' && lastCheck.payload.tests.find(t => t.id === 'eligible-recipient').pass === false);
+  D('SUBMIT_REQUEST', { lineId: 'line-a', commitmentRef: commitSeq, payeeId: 'p-capitol-tech', amount: 1000, purposeCode: 'operations', invoiceNo: 'I1' });
+  lastCheck = [...s.journal].reverse().find(e => e.kind === 'check');
+  check('duplicate invoice fails test 5', lastCheck.payload.outcome === 'VIOLATION' && lastCheck.payload.tests.find(t => t.id === 'no-duplicate').pass === false);
+
+  // judgment flag + clock
+  D('ADD_COMMITMENT', { lineId: 'line-b', amount: 900000, contractor: 'RT', description: 'red team', purposeCode: 'red-team' });
+  const commitB = s.journal[s.journal.length - 1].seq;
+  D('SUBMIT_REQUEST', { lineId: 'line-b', commitmentRef: commitB, payeeId: 'p-researcher', amount: 30000, purposeCode: 'red-team', invoiceNo: 'R1' });
+  let flag = pendingFlags(s.journal)[0];
+  check('judgment payee → FLAG w/ 3-biz-day deadline', !!flag && flag.payload.flag.deadline === addBusinessDays(flag.enteredAt, 3));
+  check('small flag: no ping', s.oversightPings.length === 0);
+  D('ADJUDICATE_FLAG', { flagRef: flag.seq, decision: 'deny' });
+  check('deny without citedTerm rejected', pendingFlags(s.journal).length === 1);
+  D('ADJUDICATE_FLAG', { flagRef: flag.seq, decision: 'approve', reasons: 'ok' });
+  check('approve issues warrant', s.journal[s.journal.length - 1].kind === 'warrant');
+
+  // large flag ping + silence
+  D('SUBMIT_REQUEST', { lineId: 'line-b', commitmentRef: commitB, payeeId: 'p-researcher', amount: 600000, purposeCode: 'red-team', invoiceNo: 'R2' });
+  flag = pendingFlags(s.journal)[0];
+  const deadlineBefore = flag.payload.flag.deadline;
+  check('large flag pings overseers, clock unmoved', s.oversightPings.length === 1 && flag.payload.flag.deadline === deadlineBefore);
+  D('ADVANCE_CLOCK', { businessDays: 3 }); D('ADVANCE_CLOCK', { hours: 1 });
+  const deemed = [...s.journal].reverse().find(e => e.kind === 'adjudication');
+  check('silence deems approval + warrant by operation of law', deemed.payload.deemed === true && s.journal.some(e => e.kind === 'warrant' && e.payload.deemed === true));
+
+  // brake
+  D('PULL_BRAKE', { holders: BRAKE_PRINCIPALS.slice(0, 2), reasons: 'x', lineId: 'line-b' });
+  check('brake needs 3 of 4', s.brake.active === false);
+  D('PULL_BRAKE', { holders: BRAKE_PRINCIPALS.slice(0, 3), reasons: 'review', lineId: 'line-b' });
+  check('brake active & instantly public', s.brake.active === true && isPublic([...s.journal].reverse().find(e => e.kind === 'brake'), s.simNow));
+  D('SUBMIT_REQUEST', { lineId: 'line-b', commitmentRef: commitB, payeeId: 'p-redline', amount: 1000, purposeCode: 'red-team', invoiceNo: 'R3' });
+  check('brake refuses new request (not a violation)', s.journal[s.journal.length - 1].kind === 'note' && s.journal[s.journal.length - 1].payload.brake === true);
+  const wPending = warrantsAwaitingPayment(s.journal)[0];
+  D('EXECUTE_PAYMENT', { warrantRef: wPending.seq });
+  check('in-flight warrant still pays during brake', s.journal[s.journal.length - 1].kind === 'payment');
+  D('ADVANCE_CLOCK', { hours: 73 });
+  check('brake expires after 72h unless renewed', s.brake.active === false && s.journal.some(e => e.kind === 'brake-release'));
+
+  // publication embargo
+  const freshEntry = [...s.journal].reverse().find(e => e.kind === 'brake-release');
+  check('brake-release instantly public; payments embargoed 24h', isPublic(freshEntry, s.simNow) === true);
+
+  // milestone idempotent
+  D('CERTIFY_MILESTONE', { milestoneId: 'milestone-loc-1' });
+  led = deriveLedger(s.journal, s.bill.annex.lines);
+  const providedAfter = led.lines['line-c'].provided;
+  D('CERTIFY_MILESTONE', { milestoneId: 'milestone-loc-1' });
+  led = deriveLedger(s.journal, s.bill.annex.lines);
+  check('milestone unlocks C-2 exactly once', providedAfter === 3000000 && led.lines['line-c'].provided === 3000000 && s.journal.filter(e => e.kind === 'milestone-cert').length === 1);
+
+  // account / rail B
+  D('COUNCIL_REQUISITION', { amount: 250000, basis: 'ops', votes: 2 });
+  check('requisition needs 3 votes', s.account.balance === 0);
+  D('COUNCIL_REQUISITION', { amount: 250000, basis: 'ops', votes: 3 });
+  check('requisition credits the Account', s.account.balance === 250000 && s.journal.slice(-2).map(e => e.kind).join(',') === 'requisition,credit');
+  D('ADD_COMMITMENT', { lineId: 'line-e', amount: 90000, contractor: 'NAPA', description: 'eval', purposeCode: 'evaluation' });
+  const commitE = s.journal[s.journal.length - 1].seq;
+  D('SUBMIT_REQUEST', { lineId: 'line-e', commitmentRef: commitE, payeeId: 'p-eval', amount: 45000, purposeCode: 'evaluation', invoiceNo: 'C1' });
+  const wE = warrantsAwaitingPayment(s.journal).find(w => w.lineId === 'line-e');
+  D('EXECUTE_PAYMENT', { warrantRef: wE.seq });
+  check('rail B payment debits the Account', s.account.balance === 205000);
+
+  // floor
+  D('SET_SYSTEM_DOWN');
+  D('SUBMIT_REQUEST', { lineId: 'line-a', commitmentRef: commitSeq, payeeId: 'p-capitol-tech', amount: 15000, purposeCode: 'operations', invoiceNo: 'I9' });
+  check('floor routes payment old-way', s.floor.oldWayPayments.length === 1);
+  D('RESTORE_SYSTEM');
+  check('restore reconciles into the Journal', s.floor.oldWayPayments.length === 0 && s.journal.some(e => e.kind === 'reconciliation'));
+  led = deriveLedger(s.journal, s.bill.annex.lines);
+  check('reconciled payment counted as paid', led.lines['line-a'].paid === 55000);
+
+  // append-only + reconstruction + round-trip
+  check('append-only: entry #1 unchanged; seq strictly increasing', JSON.stringify(s.journal[0]) === snapshot && s.journal.every((e, i) => i === 0 || e.seq === s.journal[i - 1].seq + 1));
+  const a = deriveLedger(s.journal, s.bill.annex.lines);
+  const b = deriveLedger(JSON.parse(JSON.stringify(s.journal)), JSON.parse(JSON.stringify(s.bill.annex.lines)));
+  check('outside reconstruction matches to the penny', JSON.stringify(a) === JSON.stringify(b));
+  check('state JSON round-trips', JSON.stringify(JSON.parse(JSON.stringify(s))) === JSON.stringify(s));
+
+  const failed = results.filter(r => !r.pass);
+  const summary = failed.length === 0 ? `SMOKE PASS ${results.length}/${results.length}` : `SMOKE FAIL ${failed.length}/${results.length}`;
+  if (typeof document !== 'undefined' && document.title !== undefined) {
+    try { document.title = summary; } catch (e) {}
+  }
+  return { summary, results, failed };
+}
+if (typeof window !== 'undefined') window.runSmokeTests = runSmokeTests;
+
+/* ========== INIT ========== */
+Store.init();
+Store.subscribe(function() { currentFormDefaults(Store.getState()); render(); });
+currentFormDefaults(Store.getState());
+render();
+if (typeof location !== 'undefined' && location.search && location.search.indexOf('smoke=1') !== -1) {
+  const out = runSmokeTests();
+  const pre = document.createElement('pre');
+  pre.id = 'smoke-results';
+  pre.textContent = out.summary + '\n\n' + out.results.map(r => (r.pass ? '  ok  ' : 'FAIL  ') + r.name + (r.detail ? ' — ' + r.detail : '')).join('\n');
+  document.body.appendChild(pre);
+}
+</script>
+</body>
+</html>
